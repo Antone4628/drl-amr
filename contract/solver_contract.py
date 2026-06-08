@@ -32,6 +32,21 @@ class SolverContract(Protocol):
     `adapt_element` mutates one element; `balance` and `rebuild` are explicit so
     the agent owns the (expensive) rebuild boundary. The batch counterpart
     `apply_marks` (one pass, global balance, single rebuild) is added later.
+
+    Iteration modes (D-043). One agent core drives this contract in either of
+    two granularities; the driving loop (env step() vs. deployment-adapter
+    internal loop) is orthogonal to the mode — both reduce to these primitives:
+
+      Sequential (default, parity target): per element, the agent calls
+        adapt_element(idx, mark) -> balance() -> rebuild(), tracks the returned
+        cascade set in consumed_elements, then re-reads get_state() before the
+        next element. One rebuild per element per round.
+
+      Batch: the agent reads get_state() once at round start, builds a full
+        marks array, and calls apply_marks(marks) — one global balance, one
+        rebuild. No per-element re-observation, so consumed_elements is unused;
+        budget stays accurate via the committed-mark counter (+ optional
+        predict_post_balance_count).
     """
 
     # --- Lifecycle ---
@@ -86,6 +101,56 @@ class SolverContract(Protocol):
         mesh — the explicit commit after element ops. Sequential mode:
         adapt_element → balance → rebuild per element. This is the cost the
         batch mode amortizes to once per round.
+        """
+
+    # --- Adaptation (batch; one pass, global balance, single rebuild) ---
+    def apply_marks(self, marks: np.ndarray) -> SolverState:
+        """Apply a full round of decisions in one pass and return the new state.
+
+        The batch counterpart to the sequential adapt_element -> balance ->
+        rebuild triad (D-043). `marks` has shape (n_active,), values in
+        {REFINE, HOLD, COARSEN}, aligned with the current active ordering
+        (same indexing as get_state / compute_error).
+
+        Semantics:
+          - Refine marks: each marked element is refined.
+          - Coarsen marks: honored only for a *complete* sibling family — a
+            parent coarsens iff all its children are marked COARSEN and
+            eligible. A lone/partial coarsen mark is a no-op. This is the
+            dimension-agnostic coarsening form (p4est collapses a complete
+            family only) and resolves the D-034 arity hazard (1D=2, 2D=4,
+            3D=8).
+          - Ineligible marks (refine at max_level, ineligible coarsen) are
+            silently ignored.
+          - 2:1 balance is enforced globally over the resulting mesh in a
+            single pass; operators are then rebuilt once.
+
+        Unlike the sequential path this does NOT return a cascade set: all
+        decisions are made on one pre-round snapshot, so there is no "later in
+        the round" to protect and the sequential consumed_elements exclusion
+        does not apply (D-043). Budget accounting uses the agent's committed-
+        mark counter, optionally corrected by predict_post_balance_count.
+
+        Returns:
+            The new SolverState after marks + global balance + rebuild.
+        """
+
+    def predict_post_balance_count(self, marks: np.ndarray) -> int:
+        """Predict the active-element count after applying `marks` + balance,
+        WITHOUT mutating the mesh (D-043).
+
+        A cheap topology-only dry run: lets the agent's budget logic (and a
+        future alpha-scaled barrier, D-015) account for cascade-induced growth
+        before committing. Optional — a backend that cannot predict cheaply may
+        raise NotImplementedError, and the agent falls back to its committed-
+        mark counter (refine +1 / coarsen -1 per decision in 1D; the family
+        arity in higher dimensions).
+
+        Args:
+            marks: Proposed decision array, shape (n_active,), as in apply_marks.
+
+        Returns:
+            Predicted number of active elements post-balance.
         """
 
     # --- Time advance ---
