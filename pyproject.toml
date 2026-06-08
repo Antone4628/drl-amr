@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drl-amr"
+version = "0.0.0"
+description = "Contract-layered DRL for adaptive mesh refinement in DG solvers"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent*", "contract*", "backends*", "envs*", "deployment*", "training*", "analysis*", "tools*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

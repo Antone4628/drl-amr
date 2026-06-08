@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Environments
+.env
+.venv
+venv/
+.conda/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Heavy artifacts — live on Borah + Mac, never committed (D-037)
+models/
+results/
+logs/
+tensorboard/
+checkpoints/
+*.zip
+*.out
+*.err
+
+# Notebook checkpoints
+.ipynb_checkpoints/

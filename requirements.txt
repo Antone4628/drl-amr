@@ -1,0 +1,21 @@
+# Core scientific computing
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+
+# Machine learning
+torch
+stable-baselines3
+sb3-contrib
+gymnasium
+
+# Utilities
+pyyaml
+
+# Testing
+pytest
+
+# Linting (practices doc §4)
+ruff
