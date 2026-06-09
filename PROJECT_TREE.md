@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-06-08 01:18:01
+Generated: 2026-06-08 22:35:03
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -14,16 +14,31 @@ drl-amr/
 ├── backends/
 │   ├── python_1d/
 │   │   ├── amr/
-│   │   │   └── __init__.py
+│   │   │   ├── __init__.py
+│   │   │   ├── adapt.py
+│   │   │   ├── forest.py
+│   │   │   ├── mesh_utils.py
+│   │   │   └── projection.py
 │   │   ├── dg/
-│   │   │   └── __init__.py
+│   │   │   ├── __init__.py
+│   │   │   ├── basis.py
+│   │   │   └── matrices.py
 │   │   ├── grid/
-│   │   │   └── __init__.py
-│   │   └── __init__.py
+│   │   │   ├── __init__.py
+│   │   │   └── mesh.py
+│   │   ├── solvers/
+│   │   │   ├── __init__.py
+│   │   │   ├── dg_advection_solver_multiround.py
+│   │   │   ├── error_indicators.py
+│   │   │   └── utils.py
+│   │   ├── __init__.py
+│   │   └── contract_impl.py
 │   └── __init__.py
 ├── configs/
 ├── contract/
-│   └── __init__.py
+│   ├── __init__.py
+│   ├── element_state.py
+│   └── solver_contract.py
 ├── deployment/
 │   └── __init__.py
 ├── drl_amr.egg-info/
@@ -32,6 +47,14 @@ drl-amr/
 ├── runs/
 ├── tests/
 │   ├── fixtures/
+│   ├── python_1d/
+│   │   ├── amr/
+│   │   │   ├── test_adapt.py
+│   │   │   ├── test_amr_primitives.py
+│   │   │   ├── test_forest.py
+│   │   │   └── test_zz_projection_sanity.py
+│   │   └── dg/
+│   │       └── test_matrices.py
 │   └── __init__.py
 ├── tools/
 │   ├── __init__.py
