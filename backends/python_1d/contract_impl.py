@@ -11,7 +11,7 @@ Parity target (D-038): in sequential mode the triad
     adapt_element(idx, mark) -> balance() -> rebuild()
 reproduces the old DGAMREnvMultiround._execute_action behavior element-by-
 element (refine/coarsen primitive, then explicit balance with cascade capture,
-then a single matrix+forcing rebuild).
+then a single matrix rebuild).
 
 Scope: the sequential surface is implemented. The batch seam (apply_marks,
 predict_post_balance_count; D-043) is deferred past Phase 4 — sequential is the
@@ -158,7 +158,6 @@ class Python1DSolverContract:
 
     def rebuild(self) -> None:
         self._solver._update_matrices()
-        self._solver._update_forcing()
 
     # --- Adaptation (batch; deferred past Phase 4 — D-043) -----------------
     def apply_marks(self, marks: np.ndarray) -> SolverState:

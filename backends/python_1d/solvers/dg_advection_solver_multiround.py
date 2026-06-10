@@ -13,9 +13,9 @@ The solver implements:
     - L2 projection for solution transfer between meshes
 
 The advection equation solved is:
-    ∂q/∂t + c * ∂q/∂x = f(x,t)
+    ∂q/∂t + c * ∂q/∂x = 0
     
-where 'c' is the wave speed and f is an optional forcing term.
+where 'c' is the wave speed.
 
 Example:
     >>> import numpy as np
@@ -58,7 +58,7 @@ from ..dg.matrices import (
     create_RM_matrix,
 )
 from ..grid.mesh import create_grid_us
-from .utils import eff, exact_solution
+from .utils import exact_solution
 
 
 class DGAdvectionSolver:
@@ -119,10 +119,6 @@ class DGAdvectionSolver:
             balance: If True, enforce 2:1 balance constraint on mesh
                 (no element can be more than one level different from neighbors).
         
-        Note:
-            The solver initializes to a steady-state solution of the forced
-            advection equation. The initial condition from icase determines
-            the forcing function that maintains this steady state.
         """
         # Store polynomial order and compute derived quantities
         self.nop = nop
@@ -170,8 +166,7 @@ class DGAdvectionSolver:
         # Initialize projection operators for AMR
         self._initialize_projections()
         
-        # Initialize forcing and DG operators
-        self.f = self._initialize_forcing()
+        # Initialize DG operators
         self._update_matrices()
 
     # =========================================================================
@@ -225,31 +220,6 @@ class DGAdvectionSolver:
             self.coord, self.npoin_dg, self.time, self.icase
         )
         return q
-    
-    def _initialize_forcing(self):
-        """
-        Initialize forcing function for steady-state problem.
-        
-        Computes the forcing term f(x) that makes the initial condition
-        a steady-state solution of the forced advection equation.
-        
-        Returns:
-            Forcing vector at all DG nodes.
-        """
-        self.f = eff(self.coord, self.npoin_dg, self.icase, self.wave_speed, self.time)
-        return self.f
-    
-    def _update_forcing(self):
-        """
-        Update forcing function for current mesh and time.
-        
-        Called after mesh adaptation to recompute forcing at new node locations.
-        
-        Returns:
-            Updated forcing vector at all DG nodes.
-        """
-        self.f = eff(self.coord, self.npoin_dg, self.icase, self.wave_speed, self.time)
-        return self.f
     
     def _initialize_projections(self):
         """
@@ -406,15 +376,6 @@ class DGAdvectionSolver:
         """
         qe, _ = exact_solution(self.coord, self.npoin_dg, self.time, self.icase)
         return qe
-    
-    def get_forcing(self):
-        """
-        Evaluate forcing function at current node locations.
-        
-        Returns:
-            Forcing values at all DG nodes.
-        """
-        return eff(self.coord, self.npoin_dg, self.icase, self.wave_speed, self.time)
 
     # =========================================================================
     # Mesh Quality and Validation
@@ -545,17 +506,15 @@ class DGAdvectionSolver:
         Calls the stateless primitives from adapt.py to update mesh topology
         and project the solution. Rebuilds grid connectivity afterward.
 
-        Does NOT rebuild DG matrices (_update_matrices), forcing
-        (_update_forcing), or recompute timestep. The caller is responsible
-        for these after all mesh modifications (including balance enforcement)
-        are complete. This avoids redundant matrix rebuilds when balance
-        cascades follow the action.
+        Does NOT rebuild DG matrices (_update_matrices) or recompute timestep. 
+        The caller is responsible for these after all mesh modifications 
+        (including balance enforcement) are complete. 
+        This avoids redundant matrix rebuilds when balance cascades follow the action.
 
         Typical caller pattern (env._execute_action):
             solver.refine_element(idx)
             solver.balance_mesh(balance=True)   # may refine more elements
             solver._update_matrices()
-            solver._update_forcing()
 
         Args:
             active_idx: Index into self.active (0-based) of the element
@@ -609,11 +568,10 @@ class DGAdvectionSolver:
         from adapt.py to update mesh topology and project the solution, and
         rebuilds grid connectivity.
 
-        Does NOT rebuild DG matrices (_update_matrices), forcing
-        (_update_forcing), or recompute timestep. The caller is responsible
-        for these after all mesh modifications (including balance enforcement)
-        are complete. See refine_element() docstring for the typical caller
-        pattern.
+        Does NOT rebuild DG matrices (_update_matrices) or recompute timestep. 
+        The caller is responsible for these after all mesh modifications 
+        (including balance enforcement) are complete. See refine_element() 
+        docstring for the typical caller pattern.
 
         Args:
             active_idx: Index into self.active (0-based) of one of the two
@@ -751,7 +709,6 @@ class DGAdvectionSolver:
         
         # Update operators for new mesh
         self._update_matrices()
-        self._update_forcing()
         self.verify_state()
         
         if update_dt:
