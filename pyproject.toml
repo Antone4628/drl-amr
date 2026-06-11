@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "contract*", "backends*", "envs*", "deployment*", "training*", "analysis*", "tools*"]
+include = ["agent*", "contract*", "backends*", "envs*", "drivers*", "deployment*", "training*", "analysis*", "tools*"]
 
 [tool.ruff]
 line-length = 120
