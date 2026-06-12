@@ -65,7 +65,7 @@ class AgentCore:
         lambda_local: float = 0.1,
         lambda_global: float = 1.0,
         element_budget: int = 30,
-        error_indicator: str = "raw_jump",
+        error_indicator: str = "zz_style",
         mode: str = MODE_SEQUENTIAL,
         refine_arity: int = 2,
     ):

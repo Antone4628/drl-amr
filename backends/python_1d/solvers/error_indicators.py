@@ -11,8 +11,13 @@ This is in the same family as DynAMO's h-refinement estimator (ZZ-type
 interface non-conformity), simplified to raw jump magnitude.
 
 Architecture Decisions:
-    D-004: alpha-based error normalization (DynAMO Eq. 15-16)
-    D-008: Max-over-interval error for retrospective reward (DynAMO Eq. 22)
+    D-032: ZZ-style patch-projection estimator (primary; raw boundary jump
+           retained for ablation)
+
+alpha-normalization / thresholds (D-004) moved to agent/normalization.py
+(RESTRUCTURE Phase 5) — pure math on the error vector, not indicator
+computation. Max-over-interval accumulation (D-008) lives in the
+solver-advance / reward path, not here.
 
 References:
     - Dzanic et al. (2024), DynAMO — Eq. 15, 16, 21, 22
@@ -20,17 +25,14 @@ References:
     - Cockburn (2003) — relationship between DG interface jumps and error
 
 Usage:
-    >>> from numerical.solvers.error_indicators import (
+   >>> from backends.python_1d.solvers.error_indicators import (
     ...     compute_element_errors,
-    ...     compute_alpha_thresholds,
-    ...     compute_normalized_error,
     ...     compute_element_errors_zz,
+    ...     compute_errors,
     ... )
     >>> errors = compute_element_errors(solver)
     >>> errors_zz = compute_element_errors_zz(solver)
     >>> errors_dispatched = compute_errors(solver, indicator='zz_style')
-    >>> e_max, e_min = compute_alpha_thresholds(errors, alpha=0.1, beta=1.2)
-    >>> obs_error = compute_normalized_error(errors[k], alpha=0.1, e_inf=errors.max())
 """
 
 import numpy as np
@@ -98,80 +100,6 @@ def compute_element_errors(solver):
         errors[i] = np.mean(jumps) if jumps else 0.0
     
     return errors
-
-
-# =========================================================================
-# Thresholds: alpha-based classification boundaries
-# =========================================================================
-
-# compute_alpha_thresholds(errors, alpha, beta) -> (e_max, e_min)
-# DynAMO Eq. 16, 21. Elements above e_max are under-refined,
-# below e_min are over-refined, between is the neutral zone.
-
-def compute_alpha_thresholds(errors, alpha, beta):
-    """Compute DynAMO-style error thresholds for element classification.
-    
-    Elements with error above e_max are under-refined.
-    Elements with error below e_min are over-refined.
-    Elements between e_min and e_max are in the neutral zone.
-    
-    From Architecture Spec §5.3 and DynAMO Eq. 16, 21.
-    
-    Args:
-        errors: np.ndarray of per-element error indicators.
-        alpha: Error tolerance parameter (0 < alpha < 1).
-            Smaller alpha → more aggressive refinement.
-        beta: Hysteresis parameter (beta > 1).
-            Larger beta → wider neutral zone.
-    
-    Returns:
-        (e_max, e_min): Threshold tuple.
-            e_max = alpha * max(errors)
-            e_min = e_max ** beta
-    """
-    e_inf = np.max(errors) if len(errors) > 0 else 0.0
-    e_max = alpha * e_inf
-    e_min = e_max ** beta if e_max > 0 else 0.0
-    return e_max, e_min
-
-
-# =========================================================================
-# Observation: Normalized error for RL agent
-# =========================================================================
-
-# compute_normalized_error(e_k, alpha, e_inf, eps) -> float
-# DynAMO Eq. 15. α-normalized log-error observation.
-# Values cluster around 1.0 at the decision boundary.
-
-def compute_normalized_error(e_k, alpha, e_inf, eps=1e-30):
-    """Compute α-normalized log-error observation (DynAMO Eq. 15).
-
-    o = -log10(e_k) / log10(alpha * e_inf)
-
-    In the operating regime where alpha * e_inf < 1 (guaranteed for any
-    healthy DG run, since boundary jumps are bounded by solution amplitude),
-    the refinement threshold e_max = alpha * e_inf maps to o = -1:
-        o > -1  →  e_k > e_max  →  refinement candidate
-        o < -1  →  e_k < e_max  →  below refinement threshold
-    Larger raw errors produce larger (less-negative) observation values.
-
-    
-    Args:
-        e_k: Error indicator for the element.
-        alpha: Error tolerance parameter.
-        e_inf: Max error across all active elements.
-        eps: Floor value to prevent log(0).
-    
-    Returns:
-        Normalized error scalar.
-    """
-    e_k = max(e_k, eps)
-    denominator = np.log10(alpha * max(e_inf, eps))
-    
-    if abs(denominator) < 1e-30:
-        return 0.0
-    
-    return -np.log10(e_k) / denominator
 
 # =========================================================================
 # ZZ-style error indicator (D-032)
@@ -341,7 +269,7 @@ INDICATOR_REGISTRY = {
 }
 
 
-def compute_errors(solver, indicator='raw_jump'):
+def compute_errors(solver, indicator='zz_style'):
     """Dispatch to the named error indicator function.
 
     Central entry point for all error indicator computation. The
