@@ -893,6 +893,21 @@ class DGAdvectionSolver:
         
         return self.q
 
+    def reinitialize_ic(self):
+        """Reset time to zero and reproject the IC onto the current mesh.
+
+        Re-seeds the solution from the exact initial condition sampled on the
+        current (possibly adapted) DG nodes, leaving mesh topology (xelem,
+        active, forest), connectivity (coord, intma), and DG operators
+        unchanged. Used for deployment burn-in: the agent refines the mesh to
+        resolve the IC, then the solution is re-seeded sharply on the finer
+        nodes (mirrors the IC lines in reset(), without the base-mesh rebuild).
+        Does NOT recompute the timestep — dt is owned by the contract/driver in
+        deployment, and the mesh has not changed here.
+        """
+        self.time = 0.0
+        self.q, _ = exact_solution(self.coord, self.npoin_dg, 0.0, self.icase)
+
     # =========================================================================
     # Time Stepping Methods
     # =========================================================================

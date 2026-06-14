@@ -19,8 +19,10 @@ import pytest
 
 from backends.python_1d.contract_impl import Python1DSolverContract
 from backends.python_1d.solvers.dg_advection_solver_multiround import DGAdvectionSolver
+from backends.python_1d.solvers.utils import exact_solution
 from contract.element_state import SolverState
 from contract.solver_contract import COARSEN, HOLD, REFINE, SolverContract
+from contract.solver_snapshot import SolverSnapshot
 
 # Base mesh: 4 non-uniform elements symmetric about 0 — matches the solver's
 # reset() default and the env default.
@@ -241,3 +243,101 @@ def test_batch_seam_stubs_raise(contract):
         contract.apply_marks(marks)
     with pytest.raises(NotImplementedError):
         contract.predict_post_balance_count(marks)
+
+# --- get_snapshot (deployment / visualization) -----------------------------
+
+def test_get_snapshot_is_solver_snapshot(contract):
+    assert isinstance(contract.get_snapshot(), SolverSnapshot)
+
+
+def test_snapshot_field_consistency(contract):
+    snap = contract.get_snapshot()
+    solver = contract._solver
+    assert snap.ngl == solver.ngl
+    assert snap.npoin_dg == solver.npoin_dg
+    assert snap.n_active == len(solver.active)
+    assert snap.time == pytest.approx(solver.time)
+    # solution + coords are per-DG-node and aligned
+    assert snap.q.shape == (snap.npoin_dg,)
+    assert snap.coord.shape == (snap.npoin_dg,)
+    assert snap.npoin_dg == snap.ngl * snap.n_active
+    # per-element arrays align with the active list; geometry shapes
+    assert len(snap.active) == snap.n_active
+    assert len(snap.levels) == snap.n_active
+    assert snap.xelem.shape == (snap.n_active + 1,)
+    assert snap.xgl.shape == (snap.ngl,)
+
+
+def test_snapshot_arrays_are_copies(contract):
+    """get_snapshot must return independent copies — the runner accumulates
+    snapshots while the solver keeps evolving. Verified directly via in-place
+    mutation of solver state (not via step(), which happens to rebind)."""
+    snap = contract.get_snapshot()
+    solver = contract._solver
+    assert snap.q is not solver.q
+    assert snap.coord is not solver.coord
+    q_before = snap.q.copy()
+    coord_before = snap.coord.copy()
+    solver.q[:] += 1.0
+    solver.coord[:] += 1.0
+    np.testing.assert_array_equal(snap.q, q_before)
+    np.testing.assert_array_equal(snap.coord, coord_before)
+
+
+def test_snapshot_survives_subsequent_step(contract):
+    """The realistic accumulation case: a captured frame is unchanged by a
+    later time step, and carries its own capture-time `time`."""
+    snap = contract.get_snapshot()
+    q_before = snap.q.copy()
+    t_capture = snap.time
+    contract.step(contract.get_state().stable_dt)
+    np.testing.assert_array_equal(snap.q, q_before)
+    assert snap.time == t_capture
+    assert contract._solver.time > t_capture
+
+
+def test_snapshot_tracks_mesh_growth(contract):
+    """A snapshot taken after refinement reflects the larger mesh."""
+    snap0 = contract.get_snapshot()
+    refine_at(contract, 0)
+    snap1 = contract.get_snapshot()
+    assert snap1.n_active == snap0.n_active + 1
+    assert snap1.npoin_dg == snap0.npoin_dg + snap0.ngl
+    assert snap1.q.shape == (snap1.npoin_dg,)
+    assert snap1.levels.max() == 1
+
+# --- reinitialize_ic (deployment burn-in) ----------------------------------
+
+def test_reinitialize_ic_resets_time(contract):
+    contract.step(contract.get_state().stable_dt)
+    assert contract._solver.time > 0.0
+    contract.reinitialize_ic()
+    assert contract._solver.time == 0.0
+
+
+def test_reinitialize_ic_reprojects_exact_ic(contract):
+    solver = contract._solver
+    contract.step(contract.get_state().stable_dt)
+    contract.reinitialize_ic()
+    expected, _ = exact_solution(solver.coord, solver.npoin_dg, 0.0, solver.icase)
+    np.testing.assert_allclose(solver.q, expected)
+
+
+def test_reinitialize_ic_preserves_adapted_mesh(contract):
+    """Burn-in invariant: re-seeding the IC keeps the (refined) mesh; only the
+    solution and time reset — no topology change, no rebuild."""
+    refine_at(contract, 0)
+    n_before = contract.get_state().n_active
+    levels_before = contract.get_state().level.copy()
+    xelem_before = contract._solver.xelem.copy()
+    contract.step(contract.get_state().stable_dt)
+    contract.reinitialize_ic()
+    st_after = contract.get_state()
+    assert st_after.n_active == n_before
+    np.testing.assert_array_equal(st_after.level, levels_before)
+    np.testing.assert_array_equal(contract._solver.xelem, xelem_before)
+    assert contract._solver.time == 0.0
+    # IC sampled on the refined nodes
+    solver = contract._solver
+    expected, _ = exact_solution(solver.coord, solver.npoin_dg, 0.0, solver.icase)
+    np.testing.assert_allclose(solver.q, expected)

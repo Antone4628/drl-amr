@@ -23,6 +23,7 @@ import numpy as np
 
 from contract.element_state import SolverState
 from contract.solver_contract import COARSEN, HOLD, REFINE
+from contract.solver_snapshot import SolverSnapshot
 
 from .solvers.dg_advection_solver_multiround import DGAdvectionSolver
 from .solvers.error_indicators import compute_errors
@@ -55,6 +56,11 @@ class Python1DSolverContract:
             refinement_max_level=refinement_level,
             icase=icase,
         )
+
+    def reinitialize_ic(self) -> None:
+        # Burn-in support (DEPLOYMENT_ADAPTER_DESIGN §3): re-seed the IC on the
+        # current adapted mesh — no topology change, no operator rebuild.
+        self._solver.reinitialize_ic()
 
     # --- State -------------------------------------------------------------
     def get_state(self) -> SolverState:
@@ -129,6 +135,28 @@ class Python1DSolverContract:
             stable_dt=stable_dt,
             wave_speed=float(solver.wave_speed),
             domain_length=domain_length,
+        )
+
+    # --- Snapshot (deployment / visualization) -----------------------------
+    def get_snapshot(self) -> SolverSnapshot:
+        # Copy every array: the deployment runner accumulates snapshots into a
+        # per-frame list while the solver state keeps evolving. The solver
+        # currently rebinds q/coord/etc. on step/adapt (rather than mutating in
+        # place), but copying decouples the snapshot's lifetime from solver
+        # internals and is robust to a future in-place RK optimization.
+        solver = self._solver
+        return SolverSnapshot(
+            time=float(solver.time),
+            q=np.array(solver.q, copy=True),
+            coord=np.array(solver.coord, copy=True),
+            intma=np.array(solver.intma, copy=True),
+            xelem=np.array(solver.xelem, copy=True),
+            active=np.array(solver.active, dtype=int),
+            levels=np.asarray(solver.get_active_levels(), dtype=int).copy(),
+            ngl=int(solver.ngl),
+            xgl=np.array(solver.xgl, copy=True),
+            npoin_dg=int(solver.npoin_dg),
+            n_active=len(solver.active),
         )
 
     # --- Error -------------------------------------------------------------

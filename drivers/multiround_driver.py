@@ -33,6 +33,7 @@ import numpy as np
 from agent.core import MODE_BATCH, MODE_SEQUENTIAL, AgentCore
 from agent.masking import ACTION_COARSEN, ACTION_HOLD, ACTION_REFINE
 from agent.observation import OBS_DIM
+from contract.element_state import SolverState
 
 _ACTION_LABELS = {ACTION_COARSEN: "coarsen", ACTION_HOLD: "hold", ACTION_REFINE: "refine"}
 
@@ -150,22 +151,11 @@ class MultiroundDriver:
                 self.contract.step(dt=step_dt)
                 time_advanced += step_dt
 
-        # --- Interval-fixed thresholds from the post-advance distribution ----
-        errors = self.core.compute_error()
-        self.e_max, self.e_min = self.core.compute_thresholds(errors)
-
-        # --- Episode + first-round state -------------------------------------
-        state = self.contract.get_state()
-        self.max_interval_errors = np.zeros(state.n_active)
+        # --- Episode + first-interval state (thresholds + queue via begin_interval) ---
         self.remesh_step = 0
-        self.round_number = 1
-        self.consumed_elements = set()
         self._episode_steps = 0
-
-        self.core.begin_round(state)
-        self.queue = self.core.build_queue(state, errors, self.e_max, self.e_min)
-        self.queue_position = 0
-        self.current_element_idx = self._resolve(state, self.queue[0])
+        state, errors = self.begin_interval()
+        self.max_interval_errors = np.zeros(state.n_active)
         obs = self.core.observe(state, errors, self.current_element_idx, self.round_number)
 
         info = {
@@ -256,6 +246,56 @@ class MultiroundDriver:
 
         return obs, reward, terminated, False, info
 
+    def begin_interval(self) -> tuple[SolverState, np.ndarray]:
+        """Set up an interval from the current (post-advance) mesh: recompute
+        interval-fixed thresholds, reset the round counter and cascade-exclusion
+        set, build the round-1 queue, and resolve the first element (D-021).
+
+        Shared by reset() (first interval), _start_new_interval() (training
+        transitions), and the deployment runner (each interval). Does NOT
+        advance the solver or touch remesh_step / episode counters — the caller
+        owns those. Returns (state, errors) for callers that need them (e.g. the
+        first observation).
+        """
+        errors = self.core.compute_error()
+        self.e_max, self.e_min = self.core.compute_thresholds(errors)
+        self.round_number = 1
+        self.consumed_elements = set()
+        state = self.contract.get_state()
+        self.core.begin_round(state)
+        self.queue = self.core.build_queue(state, errors, self.e_max, self.e_min)
+        self.queue_position = 0
+        self.current_element_idx = self._resolve(state, self.queue[0])
+        return state, errors
+
+    def run_adaptation_phase(self, decide_fn) -> dict:
+        """Run one interval's adaptation — max_level rounds over the current
+        mesh — with NO solver advance (the deployment runner advances between
+        phases). Each element's action comes from decide_fn(obs, masks) -> int.
+
+        A second loop-driver over the same per-element internals step() uses
+        (_commit_element + _advance_queue, mode-aware), so train/deploy
+        adaptation is identical by construction (D-047). Precondition:
+        begin_interval() has set up the queue + first element. Stops at the
+        interval boundary; treats 'interval' and 'done' identically — whether
+        more intervals follow is the caller's decision (deployment counts
+        intervals by physical time, not remesh_step).
+
+        Returns {'n_decisions', 'transition'}.
+        """
+        n_decisions = 0
+        while True:
+            state = self.contract.get_state()
+            errors = self.core.compute_error()
+            obs = self.core.observe(state, errors, self.current_element_idx, self.round_number)
+            masks = self.core.action_mask(state, self.current_element_idx, self.consumed_elements)
+            action = decide_fn(obs, masks)
+            self._commit_element(self.current_element_idx, action)
+            n_decisions += 1
+            queue_result = self._advance_queue(self.contract.get_state())
+            if queue_result["transition"] in ("interval", "done"):
+                return {"n_decisions": n_decisions, "transition": queue_result["transition"]}
+
     # --- Internal driver mechanics -----------------------------------------
 
     def _commit_element(self, active_idx: int, action: int) -> dict:
@@ -310,49 +350,73 @@ class MultiroundDriver:
                 return {"transition": "done", "skipped": skipped}
             return {"transition": "interval", "skipped": skipped}
 
-    def _advance_solver(self) -> dict:
-        """Advance the PDE by one interval T, accumulating max-over-interval
-        errors (D-008). The driver owns this loop (D-046); the mesh is fixed
-        throughout, so stable_dt and the error array stay valid."""
-        state = self.contract.get_state()
-        T = self.step_domain_fraction * state.domain_length / state.wave_speed
-        dt = state.stable_dt  # no /2 (carry-forward 2)
-        n_steps = max(1, int(np.ceil(T / dt)))
+    def advance(self, duration: float, substep_callback=None) -> dict:
+        """Advance the PDE by `duration` with exact-landing CFL sub-stepping.
 
-        self.max_interval_errors = np.zeros(state.n_active)
-        errors = self.core.compute_error()  # include the t_tau snapshot
-        self.max_interval_errors = np.maximum(self.max_interval_errors, errors)
+        The generalized advance both shells reuse (D-047): the mesh is fixed
+        for the whole call, so dt = state.stable_dt is constant, and the final
+        sub-step is clamped so the total lands exactly on `duration` (no
+        overshoot). Mesh topology and operators are untouched.
+
+        substep_callback (optional, zero-arg) is invoked once at the start
+        (before any step, i.e. at the t_start state) and once after each
+        completed sub-step. Training passes an error-accumulation callback
+        (D-008 max-over-interval); deployment passes a frame-capture callback.
+        It is opt-in precisely so a deployment advance pays NO per-sub-step
+        error recompute (ZZ is expensive — DEPLOYMENT_ADAPTER_DESIGN.md §3).
+
+        dt note (D-050): uses state.stable_dt (actual-mesh, no /2) — the current
+        training value. The fixed worst-case-dt switch is a separate, isolated
+        change (build-order step 8); keeping it out of here makes this advance
+        behavior-neutral.
+        """
+        state = self.contract.get_state()
+        dt = state.stable_dt  # actual-mesh, no /2 (carry-forward 2; D-050 step 8)
+        n_steps = max(1, int(np.ceil(duration / dt)))
+
+        if substep_callback is not None:
+            substep_callback()  # t_start hook (e.g. the t_tau error snapshot)
 
         time_advanced = 0.0
         for _ in range(n_steps):
-            step_dt = min(dt, T - time_advanced)
+            step_dt = min(dt, duration - time_advanced)
             if step_dt <= 1e-15:
                 break
             self.contract.step(dt=step_dt)
             time_advanced += step_dt
+            if substep_callback is not None:
+                substep_callback()
+
+        return {"T": duration, "dt": dt, "n_steps": n_steps}
+
+    def _advance_solver(self) -> dict:
+        """Advance the PDE by one interval T, accumulating max-over-interval
+        errors (D-008). The driver owns this loop (D-046); the mesh is fixed
+        throughout, so stable_dt and the error array stay valid. Thin wrapper
+        over advance(): the D-008 accumulation is the per-sub-step callback."""
+        state = self.contract.get_state()
+        T = self.step_domain_fraction * state.domain_length / state.wave_speed
+        self.max_interval_errors = np.zeros(state.n_active)
+
+        def _accumulate() -> None:
             errors = self.core.compute_error()
             self.max_interval_errors = np.maximum(self.max_interval_errors, errors)
 
+        adv = self.advance(T, substep_callback=_accumulate)
+
         return {
-            "T": T,
-            "dt": dt,
-            "n_steps": n_steps,
+            "T": adv["T"],
+            "dt": adv["dt"],
+            "n_steps": adv["n_steps"],
             "max_error_peak": float(np.max(self.max_interval_errors)),
         }
 
     def _start_new_interval(self) -> None:
         """Set up the next interval AFTER the advance (thresholds from the
-        post-advance distribution, D-021)."""
+        post-advance distribution, D-021). Interval setup is shared with reset()
+        and the deployment adaptation phase via begin_interval()."""
         self.remesh_step += 1
-        errors = self.core.compute_error()
-        self.e_max, self.e_min = self.core.compute_thresholds(errors)
-        self.round_number = 1
-        self.consumed_elements = set()
-        state = self.contract.get_state()
-        self.core.begin_round(state)
-        self.queue = self.core.build_queue(state, errors, self.e_max, self.e_min)
-        self.queue_position = 0
-        self.current_element_idx = self._resolve(state, self.queue[0])
+        self.begin_interval()
         self._log(1, f"\n  Remesh interval {self.remesh_step + 1}/{self.n_remesh} "
                      f"(e_max={self.e_max:.6f}, e_min={self.e_min:.6f})")
 

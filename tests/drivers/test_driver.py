@@ -345,3 +345,78 @@ def test_batch_episode_completes():
     transitions = [s[4]["transition"] for s in steps]
     assert transitions.count("done") == 1
     assert transitions.count("interval") == driver.n_remesh - 1
+
+# ---------------------------------------------------------------------------
+# advance() — generalized exact-landing sub-stepping (D-047, build-order step 3)
+# ---------------------------------------------------------------------------
+def test_advance_lands_exactly_and_substeps():
+    driver, fake, _ = make_driver()
+    driver.reset(options={"icase": 1})
+    t0 = fake._time
+    calls = []
+    # dt = stable_dt = 0.05; duration 0.12 -> ceil(0.12/0.05) = 3 sub-steps,
+    # the last clamped to land exactly on the requested duration.
+    driver.advance(0.12, substep_callback=lambda: calls.append(fake._time))
+    assert fake._time == pytest.approx(t0 + 0.12)
+    assert fake.step_count == 3
+    assert len(calls) == 4          # 1 initial (t_start) + 3 sub-steps
+
+
+def test_advance_no_callback_and_mesh_unchanged():
+    driver, fake, _ = make_driver()
+    driver.reset(options={"icase": 1})
+    n0 = driver.contract.get_state().n_active
+    rb0 = fake.rebuild_count
+    driver.advance(0.1)             # callback=None must be safe
+    assert driver.contract.get_state().n_active == n0
+    assert fake.rebuild_count == rb0
+    assert fake._time == pytest.approx(0.1)
+
+# ---------------------------------------------------------------------------
+# begin_interval / run_adaptation_phase (deployment surface, build-order step 4)
+# ---------------------------------------------------------------------------
+def test_begin_interval_sets_up_queue_and_first_element():
+    driver, _, _ = make_driver(n_remesh=2, max_level=2, n_base=4)
+    driver.reset(options={"icase": 1})
+    driver.round_number = 99            # dirty state begin_interval must reset
+    driver.consumed_elements = {123}
+    state, errors = driver.begin_interval()
+    assert driver.round_number == 1
+    assert driver.consumed_elements == set()
+    assert len(driver.queue) == state.n_active
+    assert driver.queue_position == 0
+    assert errors.shape == (state.n_active,)
+    assert 0 <= driver.current_element_idx < state.n_active
+
+
+def test_run_adaptation_phase_hold_visits_all_no_advance():
+    driver, fake, _ = make_driver(n_remesh=2, max_level=2, n_base=4)
+    driver.reset(options={"icase": 1})
+    fake.step_count = 0
+    t0 = fake._time
+    result = driver.run_adaptation_phase(lambda obs, mask: ACTION_HOLD)
+    # max_level rounds * n_base elements, no mesh change under HOLD
+    assert result["n_decisions"] == 2 * 4
+    assert result["transition"] in ("interval", "done")
+    # NO solver advance during an adaptation phase
+    assert fake.step_count == 0
+    assert fake._time == pytest.approx(t0)
+    assert driver.contract.get_state().n_active == 4
+
+
+def test_run_adaptation_phase_refine_grows_mesh_no_advance():
+    driver, fake, _ = make_driver(n_remesh=2, max_level=2, n_base=4)
+    driver.reset(options={"icase": 1})
+    fake.step_count = 0
+    n0 = driver.contract.get_state().n_active
+    fired = {"once": False}
+
+    def decide(obs, mask):
+        if not fired["once"]:
+            fired["once"] = True
+            return ACTION_REFINE
+        return ACTION_HOLD
+
+    driver.run_adaptation_phase(decide)
+    assert driver.contract.get_state().n_active > n0
+    assert fake.step_count == 0          # still no advance

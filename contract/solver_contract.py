@@ -13,6 +13,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from contract.element_state import SolverState
+from contract.solver_snapshot import SolverSnapshot
 
 # Mark vocabulary, shared by adapt_element (sequential) and apply_marks (batch).
 COARSEN = -1
@@ -62,7 +63,20 @@ class SolverContract(Protocol):
         via get_state/compute_error. (icase is 1D-wave-specific; generalization
         parked → P-012.)
         """
-    
+
+    def reinitialize_ic(self) -> None:
+        """Reset time to zero and reproject the initial condition onto the
+        current (possibly adapted) mesh — mesh topology and operators
+        unchanged.
+
+        Deployment burn-in (DEPLOYMENT_ADAPTER_DESIGN.md §3): after the agent
+        refines the mesh to resolve the IC, re-seed the solution from the exact
+        IC sampled on the now-finer nodes (sharper than the L2-projected
+        solution carried through refinement), then refine again. No operator
+        rebuild — geometry is unchanged. (icase-based IC is 1D-wave-specific →
+        P-012.)
+        """
+
     # --- State ---
     def get_state(self) -> SolverState:
         """Return a structure-of-arrays snapshot of the active mesh —
@@ -70,6 +84,20 @@ class SolverContract(Protocol):
         agent needs a fresh view, notably after every mutating action (cascades
         and coarsening shift active positions). Error indicators are NOT
         included; the agent pairs this with compute_error(indicator).
+        """
+
+    # --- Snapshot (deployment / visualization; no mesh change) ---
+    def get_snapshot(self) -> SolverSnapshot:
+        """Return a copy-safe snapshot of the physical solution + mesh geometry
+        for deployment-time visualization (animations, plots, static frames).
+
+        Distinct from get_state (agent-facing topology): this is the deployment
+        artifact — the current solution field plus enough geometry to render it.
+        No error recomputation (ZZ is expensive — error-bearing data lands at
+        adaptation boundaries / the final frame instead) and no Gym/reward
+        machinery. The returned arrays are independent copies, safe to
+        accumulate into a per-frame list across a full simulation while the
+        solver state evolves (DEPLOYMENT_ADAPTER_DESIGN.md §3).
         """
 
     # --- Error ---
