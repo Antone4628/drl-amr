@@ -72,6 +72,20 @@ def build_driver_from_config(config: dict, *, mode: str = MODE_SEQUENTIAL) -> Mu
     )
     return driver
 
+def make_exact_fn(icase: int):
+    """Build an exact-solution overlay fn (coord, time) -> q for a 1D-advection
+    icase, to fill the viz's exact_fn seam. All current icases have an analytic
+    solution (linear advection); for problems/backends without one, pass
+    exact_fn=None to the viz (auto-off). Backend-aware on purpose — kept out of
+    analysis/ so the viz stays backend-free.
+    """
+    from backends.python_1d.solvers.utils import exact_solution
+
+    def exact_fn(coord, time):
+        q, _ = exact_solution(coord, len(coord), time, icase)
+        return q
+
+    return exact_fn
 
 def load_model(path: str):
     """Load a trained MaskablePPO model (lazy import — sb3_contrib is only needed
