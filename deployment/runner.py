@@ -10,7 +10,7 @@ Shape (DEPLOYMENT_ADAPTER_DESIGN.md §2-§3):
   init: driver.reset (IC + initial_refinement_level), then optional burn-in —
         repeat [run_adaptation_phase -> reinitialize_ic -> begin_interval] to
         refine the mesh to the IC before timestepping (D-049: burn-in replaces
-        the retired pre-advance; deployment assumes pre_advance is off).
+        the retired pre-advance).
   loop: per interval, run_adaptation_phase(decide_fn) (rounds, no advance) ->
         advance(T_interval) with sim-time output cadence + exact landing ->
         begin_interval. Runs to time_final (final interval shortened to land
@@ -26,6 +26,7 @@ from __future__ import annotations
 import numpy as np
 
 from contract.solver_snapshot import SolverSnapshot
+from deployment.metrics import Metric
 from drivers.multiround_driver import MultiroundDriver
 
 
@@ -57,8 +58,9 @@ class DeploymentRunner:
         time_final: float,
         output_dt: float | None = None,
         burnin: bool = False,
-        n_burnin: int = 0,
+       n_burnin: int = 0,
         capture_remesh: bool = True,
+        metrics: list[Metric] | None = None,
     ):
         self.driver = driver
         self.contract = driver.contract
@@ -67,7 +69,9 @@ class DeploymentRunner:
         self.burnin = burnin
         self.n_burnin = n_burnin
         self.capture_remesh = capture_remesh
+        self.metrics = list(metrics) if metrics else []
         self.snapshots: list[SolverSnapshot] = []
+        self.metric_results: list = []
 
     # --- Public --------------------------------------------------------------
     def run(
@@ -75,6 +79,7 @@ class DeploymentRunner:
     ) -> list[SolverSnapshot]:
         """Run the full simulation to time_final and return the snapshot list."""
         self.snapshots = []
+        self.metric_results = []
         self._init(decide_fn, icase, rng)
 
         state = self.contract.get_state()
@@ -94,16 +99,17 @@ class DeploymentRunner:
             if not is_final:
                 self.driver.begin_interval()  # set up next interval (D-021)
 
+        self.metric_results = [m.finalize() for m in self.metrics]
         return self.snapshots
 
     # --- Internal ------------------------------------------------------------
     def _init(self, decide_fn, icase: int, rng) -> None:
         """Reset to IC (+ initial_refinement_level), then optional burn-in.
 
-        Deployment assumes pre-advance is OFF (config pre_advance_range=[0,0];
-        D-049). Burn-in is the deployment-time mesh warm-up: each pass refines on
-        the current solution, re-seeds the exact IC on the finer mesh, and
-        re-sets up the interval. The post-burn-in mesh determines the whole
+        Pre-advance is retired (D-049); deployment init is IC projection plus the
+        optional burn-in. Burn-in is the deployment-time mesh warm-up: each pass
+        refines on the current solution, re-seeds the exact IC on the finer mesh,
+        and re-sets up the interval. The post-burn-in mesh determines the whole
         deterministic rollout, so it is first-class, not optional polish.
         """
         if rng is None:
@@ -147,3 +153,5 @@ class DeploymentRunner:
         if self.snapshots and abs(self.snapshots[-1].time - snap.time) < self._EPS:
             return
         self.snapshots.append(snap)
+        for m in self.metrics:
+            m.update(snap)

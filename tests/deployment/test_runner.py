@@ -26,7 +26,7 @@ def _small_config() -> dict:
         "environment": {
             "alpha": 0.1, "beta": 1.2, "element_budget": 30, "n_remesh": 4,
             "step_domain_fraction": 0.05, "initial_refinement_level": 1,
-            "pre_advance_range": [0.0, 0.0], "error_indicator": "zz_style",
+            "error_indicator": "zz_style",
             "ic_pool": [1], "verbosity": 0,
         },
         "reward": {
@@ -124,3 +124,35 @@ def test_burnin_refines_initial_mesh():
         _refine_fn, icase=1)
     # burn-in applies adaptation passes before t=0 -> finer starting mesh
     assert s_yes[0].n_active > s_no[0].n_active
+
+# --- metrics seam (step 7) -------------------------------------------------
+class _CountMetric:
+    """Fake metric for the seam test: records n_active per captured frame."""
+
+    def __init__(self):
+        self.seen = []
+
+    def update(self, snap):
+        self.seen.append(snap.n_active)
+
+    def finalize(self):
+        return {"n_frames": len(self.seen), "max_n_active": max(self.seen)}
+
+
+def test_count_metric_satisfies_protocol():
+    from deployment.metrics import Metric
+    assert isinstance(_CountMetric(), Metric)
+
+
+def test_runner_drives_metrics():
+    cfg = _small_config()
+    driver = build_driver_from_config(cfg)
+    T = _t_interval(driver)
+    m = _CountMetric()
+    runner = DeploymentRunner(driver, time_final=4 * T, output_dt=T / 2, metrics=[m])
+    snaps = runner.run(random_decide_fn(np.random.default_rng(0)), icase=1)
+    # one update per captured frame; finalized result available positionally
+    assert m.seen and len(m.seen) == len(snaps)
+    assert len(runner.metric_results) == 1
+    assert runner.metric_results[0]["n_frames"] == len(snaps)
+    assert runner.metric_results[0]["max_n_active"] == max(s.n_active for s in snaps)

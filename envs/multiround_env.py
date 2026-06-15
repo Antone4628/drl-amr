@@ -8,14 +8,14 @@ its own internal loop, so behavioral train/deploy consistency is by construction
 (the old "must mirror the env exactly" instruction is retired).
 
 The env holds no episode state and no episode parameters: IC pool, n_remesh,
-step_domain_fraction, element_budget, pre_advance_range all live on the
-driver/core. The only things here are the gym spaces and the seeded-RNG handoff.
+step_domain_fraction, element_budget all live on the driver/core. The only
+things here are the gym spaces and the seeded-RNG handoff.
 
 RNG handoff (D-038 parity). reset() calls super().reset(seed=seed) to seed
 self.np_random, then passes that same Gymnasium generator into driver.reset(
-rng=...). Because the driver draws the IC (choice) then the D-029 pre-advance
-multiplier (uniform) in that order, the stream is bit-identical to the old
-dg_amr_env_multiround.py — the parity target.
+rng=...). The driver draws the IC (choice); the D-029 pre-advance was retired
+(D-049), so the IC-choice stream alone is bit-identical to the old
+dg_amr_env_multiround.py run (pre-advance was off there) — the parity target.
 
 Spaces (lifted verbatim from the old env; Architecture Spec Section 6.2):
     action_space      = Discrete(3)   [0 coarsen, 1 hold, 2 refine]
@@ -107,8 +107,8 @@ class MultiroundEnv(gym.Env):
         """Seed self.np_random, then hand it to the driver for a new episode.
 
         Passing the Gymnasium-seeded generator into driver.reset(rng=...) makes
-        the IC -> pre-advance draw order bit-identical to the old env (D-038).
-        options keys are forwarded unchanged ('icase', 'refinement_level').
+        the IC draw bit-identical to the old env (D-038; pre-advance retired per
+        D-049). options keys are forwarded unchanged ('icase', 'refinement_level').
         """
         super().reset(seed=seed)
         return self.driver.reset(options=options, rng=self.np_random)

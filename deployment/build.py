@@ -66,7 +66,6 @@ def build_driver_from_config(config: dict, *, mode: str = MODE_SEQUENTIAL) -> Mu
         n_remesh=e["n_remesh"],
         step_domain_fraction=e["step_domain_fraction"],
         initial_refinement_level=e["initial_refinement_level"],
-        pre_advance_range=tuple(e["pre_advance_range"]),
         ic_pool=e["ic_pool"],
         verbosity=e.get("verbosity", 0),
     )

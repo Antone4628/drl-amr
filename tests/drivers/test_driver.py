@@ -168,13 +168,13 @@ class FakeContract:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def make_driver(*, mode=MODE_SEQUENTIAL, pre_advance=(0.0, 0.0),
+def make_driver(*, mode=MODE_SEQUENTIAL,
                 n_remesh=2, max_level=2, n_base=4, alpha=0.1):
     fake = FakeContract(n_base=n_base, max_level=max_level)
     core = AgentCore(fake, alpha=alpha, mode=mode, element_budget=30)
     driver = MultiroundDriver(
         core, n_remesh=n_remesh, step_domain_fraction=0.05,
-        pre_advance_range=pre_advance, verbosity=0,
+        verbosity=0,
     )
     return driver, fake, core
 
@@ -219,16 +219,6 @@ def test_rng_handoff_reproducible():
     _, i2 = d2.reset(rng=np.random.default_rng(0))
     assert i1["icase"] == i2["icase"]
     assert i1["icase"] in [1, 10, 12, 13, 14, 15, 16]
-
-
-def test_pre_advance_steps_solver_only_when_enabled():
-    d_off, f_off, _ = make_driver(pre_advance=(0.0, 0.0))
-    d_off.reset(options={"icase": 1})
-    assert f_off.step_count == 0
-
-    d_on, f_on, _ = make_driver(pre_advance=(1.0, 1.0))
-    d_on.reset(options={"icase": 1})
-    assert f_on.step_count > 0
 
 
 def test_step_returns_five_tuple_truncated_false():

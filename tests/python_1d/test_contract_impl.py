@@ -4,8 +4,8 @@ The durable form of the Phase-4 excision smoke. Exercises the *sequential*
 SolverContract surface — the parity target (D-038) — over the ported 1D DG
 multiround solver: lifecycle (reset), state snapshot (get_state), error vector
 (compute_error), the adapt_element -> balance -> rebuild triad with cascade
-reporting, and step. Also pins two deliberate design choices (D-044): the
-stable_dt no-`/2` value and the deferred batch-seam stubs.
+reporting, and step. Also pins deliberate design choices: the stable_dt fixed
+worst-case dt (D-050, no `/2`) and the deferred batch-seam stubs (D-043).
 
 Pytest regime (per the 2026-06-09 test-convention note): clean pass/fail
 invariants. Richer behavioral exploration (cascade visualization) lives in the
@@ -117,18 +117,18 @@ def test_base_mesh_topology(contract):
     assert not np.any(st.can_coarsen)
     assert np.all(st.sibling == -1)
 
-
-def test_stable_dt_has_no_half_factor(contract):
-    """Pins the deliberate no-`/2` choice (D-044, carry-forward parity item):
-    get_state().stable_dt is the env-equivalent courant_max*min_dx/wave_speed,
-    NOT solver.dt (which carries an extra /2 from _compute_timestep)."""
+def test_stable_dt_is_fixed_worst_case_no_half(contract):
+    """Pins D-050: stable_dt is the FIXED worst-case CFL dt from the finest
+    possible element (dx at max_level = solver.dx_min), with NO /2. It is
+    constant regardless of the current mesh, and distinct from solver.dt (which
+    uses actual-mesh min_dx with a /2 margin)."""
     st = contract.get_state()
     solver = contract._solver
-    dx_min = float(np.min(np.diff(solver.xelem)))
-    expected = solver.courant_max * dx_min / solver.wave_speed
+    expected = solver.courant_max * solver.dx_min / solver.wave_speed
     assert st.stable_dt == pytest.approx(expected)
-    # ...and it is exactly twice solver.dt (which carries the /2 margin)
-    assert st.stable_dt == pytest.approx(2.0 * solver.dt)
+    # fixed: refining the mesh does not change stable_dt (worst-case is constant)
+    refine_at(contract, 0)
+    assert contract.get_state().stable_dt == pytest.approx(expected)
 
 
 # --- compute_error ---------------------------------------------------------

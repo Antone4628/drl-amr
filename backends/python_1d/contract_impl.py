@@ -114,12 +114,14 @@ class Python1DSolverContract:
             ):
                 can_coarsen[i] = True
 
-        # Largest CFL-stable dt for the current mesh. Matches the old env's
-        # _advance_solver value: courant_max * min_dx / wave_speed, with NO /2
-        # margin. (solver.dt carries an extra /2 from _compute_timestep; the
-        # contract surfaces the env-equivalent dt the agent sub-steps with.)
-        dx_min = float(np.min(np.diff(solver.xelem)))
-        stable_dt = solver.courant_max * dx_min / solver.wave_speed
+        # Fixed worst-case CFL dt (D-050): from the finest POSSIBLE element —
+        # the base-min element at max_level (solver.dx_min, constant from
+        # construction) — with NO /2. Independent of the current mesh, so a
+        # coarse interval just takes a few more sub-steps; matches Jexpresso's
+        # native dt (smallest max-level element) for a backend-agnostic dt.
+        # (solver.dt is a separate quantity — actual-mesh min_dx with a /2
+        # margin from _compute_timestep — and is NOT what the agent sub-steps.)
+        stable_dt = solver.courant_max * solver.dx_min / solver.wave_speed
         domain_length = float(solver.xelem[-1] - solver.xelem[0])
 
         return SolverState(

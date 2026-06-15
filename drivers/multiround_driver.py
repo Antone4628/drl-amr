@@ -59,7 +59,6 @@ class MultiroundDriver:
         n_remesh: int = 4,
         step_domain_fraction: float = 0.05,
         initial_refinement_level: int = 0,
-        pre_advance_range: tuple[float, float] = (0.6, 1.4),
         ic_pool: list[int] | None = None,
         verbosity: int = 0,
     ):
@@ -74,8 +73,6 @@ class MultiroundDriver:
                 interval; sets T = fraction * domain_length / wave_speed.
             initial_refinement_level: uniform refinement passes at episode start
                 (0 = base mesh). Overridable per-episode via options.
-            pre_advance_range: (low, high) multiples of T for the randomized
-                D-029 pre-episode advance; (0.0, 0.0) disables it.
             ic_pool: icase pool for IC sampling; defaults to the Stage 1A pool.
             verbosity: 0 silent / 1 summary / 2 detail.
         """
@@ -84,13 +81,12 @@ class MultiroundDriver:
         self.n_remesh = n_remesh
         self.step_domain_fraction = step_domain_fraction
         self.initial_refinement_level = initial_refinement_level
-        self.pre_advance_range = pre_advance_range
         self.ic_pool = ic_pool if ic_pool is not None else list(_DEFAULT_IC_POOL)
         self.verbosity = verbosity
 
-        # RNG for IC sampling + pre-advance. The gym wrapper passes its
-        # Gymnasium-seeded np_random into reset(rng=...) so the stream is
-        # bit-identical to the env (D-038 parity).
+        # RNG for IC sampling. The gym wrapper passes its Gymnasium-seeded
+        # np_random into reset(rng=...) so the IC stream is bit-identical to
+        # the env (D-038 parity).
         self._rng = np.random.default_rng()
 
         # Episode state — set properly in reset().
@@ -112,8 +108,8 @@ class MultiroundDriver:
         """Begin a new episode and return the first element's (obs, info).
 
         The gym wrapper should call super().reset(seed=seed) itself and pass its
-        seeded generator here as rng, so IC sampling and the D-029 pre-advance
-        reproduce the env's RNG stream exactly (choice then uniform).
+        seeded generator here as rng, so IC sampling reproduces the env's RNG
+        stream exactly (the IC choice; D-029 pre-advance removed per D-049).
 
         options keys: 'icase' (force IC), 'refinement_level' (override).
         """
@@ -137,19 +133,6 @@ class MultiroundDriver:
             self.contract.reset(icase=icase)
 
         self._log(1, f"\n{'=' * 60}\n  EPISODE {self._total_episodes + 1} START (icase={icase})\n{'=' * 60}")
-
-        # --- D-029 pre-episode advance (develops nonzero t=0 errors) ----------
-        low, high = self.pre_advance_range
-        if high > 0:
-            state = self.contract.get_state()
-            T = self.step_domain_fraction * state.domain_length / state.wave_speed
-            advance_duration = float(self._rng.uniform(low, high)) * T
-            dt = state.stable_dt  # no /2 (carry-forward 2; canonical = env no-/2)
-            time_advanced = 0.0
-            while time_advanced < advance_duration - 1e-15:
-                step_dt = min(dt, advance_duration - time_advanced)
-                self.contract.step(dt=step_dt)
-                time_advanced += step_dt
 
         # --- Episode + first-interval state (thresholds + queue via begin_interval) ---
         self.remesh_step = 0
