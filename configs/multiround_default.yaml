@@ -1,0 +1,64 @@
+# =============================================================================
+# Multi-Round DRL-AMR: Default Training Configuration
+# =============================================================================
+#
+# Authoritative spec: strategy/proposals/Stage_1_Architecture_Specification.md (§10–§12)
+#
+# Stage 1A starting values, reconciled to the restructured repo:
+#   - error_indicator: zz_style is the default (D-048)
+#   - pre_advance retired (D-049) — no pre_advance_range key
+#   - initial_refinement_level: 1 — start one level up so coarsen is a live
+#     action from round 1 (the zz_style_lvl1_100k operative regime)
+#
+# Override any subset for experiments; unspecified keys fall back to
+# DEFAULT_CONFIG in training/train_multiround.py. CLI args
+# (--timesteps, --seed, --device) override this file.
+# =============================================================================
+
+# ----- Environment parameters -----
+environment:
+  alpha: 0.1                     # Error tolerance (Spec §9.2)
+  beta: 1.2                      # Hysteresis exponent (Spec §9.2)
+  element_budget: 30             # Soft cap on active elements
+  n_remesh: 4                    # Remesh intervals per episode (D-027)
+  step_domain_fraction: 0.05     # Wave travel per interval (Spec §4.1)
+  initial_refinement_level: 1    # Start one level up — coarsen live from round 1 (D-049)
+  error_indicator: "zz_style"    # Error indicator (D-048). Options: zz_style, raw_jump
+  ic_pool: [1, 10, 12, 13, 14, 15, 16]  # Multi-IC pool (Spec §11.1)
+  verbosity: 0                   # 0 = silent for training
+
+# ----- Reward parameters -----
+reward:
+  p_ur: 10.0                     # Under-refinement penalty (DynAMO default)
+  p_or: 5.0                      # Over-refinement penalty (DynAMO default)
+  p_cr: 2.0                      # Correct coarsening reward (D-020 / D-023)
+  lambda_local: 0.1              # Local reward scaling (Spec §12.3)
+  lambda_global: 1.0             # Global reward scaling (D-030)
+
+# ----- Solver parameters -----
+solver:
+  nop: 4                         # Polynomial order (D-009)
+  xelem: [-1.0, -0.4, 0.0, 0.4, 1.0]  # Base mesh nodes (4 elements)
+  max_level: 3                   # Max refinement depth / rounds per interval
+  max_elements: 120              # Safety cap (~4x budget)
+  courant_max: 0.1               # CFL number
+
+# ----- Training parameters -----
+training:
+  total_timesteps: 100000        # Stage 1A default
+  learning_rate: 3.0e-4          # PPO default (Spec §10.1)
+  gamma: 0.99                    # Discount factor
+  gae_lambda: 0.95               # GAE lambda
+  n_steps: 256                   # Rollout buffer (> 1 episode ~180 steps)
+  batch_size: 64                 # PPO minibatch size
+  n_epochs: 10                   # PPO epochs per update
+  ent_coef: 0.01                 # Entropy bonus for exploration
+  clip_range: 0.2                # PPO clip range
+  net_arch: [256, 256]           # 2x256 FCNN (matching DynAMO)
+  seed: 42                       # Random seed
+  device: auto                   # auto, cpu, or cuda
+
+# ----- Checkpointing -----
+checkpointing:
+  save_freq: 10000               # Steps between checkpoint saves
+  keep_best: true                # Reserved; periodic CheckpointCallback only (matches old script)

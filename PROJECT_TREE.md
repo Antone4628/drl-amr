@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-06-08 22:35:03
+Generated: 2026-06-16 17:44:50
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -8,9 +8,16 @@ Data dirs: collapsed
 ```
 drl-amr/
 ├── agent/
-│   └── __init__.py
+│   ├── __init__.py
+│   ├── core.py
+│   ├── masking.py
+│   ├── normalization.py
+│   ├── observation.py
+│   ├── queue.py
+│   └── reward.py
 ├── analysis/
-│   └── __init__.py
+│   ├── __init__.py
+│   └── deployment_viz.py
 ├── backends/
 │   ├── python_1d/
 │   │   ├── amr/
@@ -38,30 +45,68 @@ drl-amr/
 ├── contract/
 │   ├── __init__.py
 │   ├── element_state.py
-│   └── solver_contract.py
+│   ├── solver_contract.py
+│   └── solver_snapshot.py
 ├── deployment/
-│   └── __init__.py
+│   ├── __init__.py
+│   ├── build.py
+│   ├── evaluator.py
+│   ├── metrics.py
+│   └── runner.py
+├── drivers/
+│   ├── __init__.py
+│   └── multiround_driver.py
 ├── drl_amr.egg-info/
 ├── envs/
-│   └── __init__.py
+│   ├── __init__.py
+│   └── multiround_env.py
+├── results/ [3 dirs, 0 files]
 ├── runs/
 ├── tests/
+│   ├── agent/
+│   │   ├── test_core.py
+│   │   ├── test_masking.py
+│   │   ├── test_normalization.py
+│   │   ├── test_observation.py
+│   │   ├── test_queue.py
+│   │   └── test_reward.py
+│   ├── analysis/
+│   │   └── test_deployment_viz.py
+│   ├── deployment/
+│   │   ├── test_evaluator.py
+│   │   └── test_runner.py
+│   ├── drivers/
+│   │   └── test_driver.py
+│   ├── envs/
+│   │   └── test_env.py
 │   ├── fixtures/
 │   ├── python_1d/
 │   │   ├── amr/
 │   │   │   ├── test_adapt.py
 │   │   │   ├── test_amr_primitives.py
 │   │   │   ├── test_forest.py
+│   │   │   ├── test_projection_exactness.py
 │   │   │   └── test_zz_projection_sanity.py
-│   │   └── dg/
-│   │       └── test_matrices.py
+│   │   ├── dg/
+│   │   │   └── test_matrices.py
+│   │   ├── solvers/
+│   │   │   └── test_zz_indicator_sanity.py
+│   │   └── test_contract_impl.py
+│   ├── training/
+│   │   ├── test_diagnostics.py
+│   │   └── test_train_config.py
 │   └── __init__.py
 ├── tools/
 │   ├── __init__.py
+│   ├── balance_test.py
+│   ├── projection_exactness.py
 │   ├── run_manifest.py
-│   └── tree_gen.py
+│   ├── tree_gen.py
+│   └── visual_eval.py
 └── training/
-    └── __init__.py
+    ├── __init__.py
+    ├── diagnostics.py
+    └── train_multiround.py
 ```
 
 ---
