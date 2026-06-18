@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-06-16 17:44:50
+Generated: 2026-06-18 06:46:48
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -60,7 +60,7 @@ drl-amr/
 ├── envs/
 │   ├── __init__.py
 │   └── multiround_env.py
-├── results/ [3 dirs, 0 files]
+├── results/ [4 dirs, 0 files]
 ├── runs/
 ├── tests/
 │   ├── agent/
@@ -80,6 +80,8 @@ drl-amr/
 │   ├── envs/
 │   │   └── test_env.py
 │   ├── fixtures/
+│   ├── integration/
+│   │   └── test_multiround_smoke.py
 │   ├── python_1d/
 │   │   ├── amr/
 │   │   │   ├── test_adapt.py
@@ -90,6 +92,8 @@ drl-amr/
 │   │   ├── dg/
 │   │   │   └── test_matrices.py
 │   │   ├── solvers/
+│   │   │   ├── test_dg_advection_solver_multiround.py
+│   │   │   ├── test_error_indicators_plumbing.py
 │   │   │   └── test_zz_indicator_sanity.py
 │   │   └── test_contract_impl.py
 │   ├── training/

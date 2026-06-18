@@ -1,0 +1,11 @@
+git_commit: d8aadc2f7e7e205c03990887695a21543413d7d0
+git_dirty: true
+config_path: /Users/antonechacartegui/projects/drl-amr/results/zz_style_lvl1_100k_restruct/config.yaml
+seed: 42
+created_at: '2026-06-17T18:02:24.922980+00:00'
+python: 3.11.11
+platform: macOS-15.7.3-arm64-arm-64bit
+run_id: zz_style_lvl1_100k_restruct
+results_dir: /Users/antonechacartegui/projects/drl-amr/results/zz_style_lvl1_100k_restruct
+total_timesteps: 100000
+error_indicator: zz_style
