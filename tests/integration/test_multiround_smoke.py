@@ -22,7 +22,7 @@ without pre-advance (retired, D-049).
 
 import numpy as np
 
-from agent.core import AgentCore
+from agent.core import MODE_BATCH, AgentCore
 from agent.masking import ACTION_COARSEN, ACTION_HOLD, ACTION_REFINE
 from backends.python_1d.contract_impl import Python1DSolverContract
 from backends.python_1d.solvers.dg_advection_solver_multiround import DGAdvectionSolver
@@ -45,26 +45,49 @@ _STEP_CAP = 2000  # generous upper bound; tripping it means a stuck episode
 _N_STRESS_EPISODES = 50
 
 
-def make_env(*, n_remesh=4, max_level=3, element_budget=30, initial_refinement_level=0):
-    """Build the real contract -> core -> driver -> env chain for the smoke."""
-    solver = DGAdvectionSolver(
-        nop=4,
-        xelem=_BASE_XELEM.copy(),
-        max_elements=120,
-        max_level=max_level,
-        icase=1,
-        balance=False,
-    )
+def make_env(*, n_remesh=4, max_level=3, element_budget=30,
+             initial_refinement_level=0, mode="sequential"):
+    solver = DGAdvectionSolver(nop=4, xelem=_BASE_XELEM.copy(), max_elements=120,
+                               max_level=max_level, icase=1, balance=False)
     contract = Python1DSolverContract(solver)
-    core = AgentCore(contract, element_budget=element_budget, error_indicator="zz_style")
-    driver = MultiroundDriver(
-        core,
-        n_remesh=n_remesh,
-        step_domain_fraction=0.05,
-        initial_refinement_level=initial_refinement_level,
-        ic_pool=list(_IC_POOL),
-    )
+    core = AgentCore(contract, element_budget=element_budget,
+                     error_indicator="zz_style", mode=mode)
+    driver = MultiroundDriver(core, n_remesh=n_remesh, step_domain_fraction=0.05,
+                              initial_refinement_level=initial_refinement_level,
+                              ic_pool=list(_IC_POOL))
     return MultiroundEnv(driver)
+
+
+def test_batch_all_hold_matches_sequential_structure():
+    """Batch all-hold = sequential all-hold: same step/transition counts (hold
+    changes nothing, so apply_round is a no-op), and the committed counter stays
+    at n_active every round."""
+    env = make_env(n_remesh=4, max_level=3, mode=MODE_BATCH)
+    _, info = env.reset(seed=0, options={"icase": 1})
+    n_active = info["n_active"]
+    steps, terminated = 0, False
+    while not terminated:
+        _, _, terminated, _, info = env.step(ACTION_HOLD)
+        steps += 1
+        assert env.driver.core.committed_count == n_active  # all holds → delta 0
+        assert steps <= _STEP_CAP
+    assert steps == n_active * 3 * 4  # == the sequential all-hold count
+
+def test_batch_random_completes():
+    """Random valid actions in batch mode run to termination, no NaN, exercising
+    apply_marks -> apply_round at every round/interval boundary."""
+    env = make_env(mode=MODE_BATCH)
+    env.reset(seed=2)
+    for _ in range(10):
+        env.reset()
+        steps, terminated = 0, False
+        while not terminated:
+            mask = env.action_masks()
+            obs, reward, terminated, _, info = env.step(_random_valid_action(env, mask))
+            steps += 1
+            assert np.all(np.isfinite(obs)) and np.isfinite(reward)
+            assert env.driver.core.committed_count >= 1
+            assert steps <= _STEP_CAP
 
 
 def _random_valid_action(env, mask):

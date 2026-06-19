@@ -236,11 +236,10 @@ def test_step_advances_time_without_remeshing(contract):
 
 # --- batch seam (deferred, D-043) ------------------------------------------
 
-def test_batch_seam_stubs_raise(contract):
-    st = contract.get_state()
-    marks = np.zeros(st.n_active, dtype=int)
-    with pytest.raises(NotImplementedError):
-        contract.apply_marks(marks)
+def test_predict_post_balance_count_stub_raises(contract):
+    """apply_marks is implemented (Phase 7.5); predict_post_balance_count stays
+    the deferred optional stub — the agent uses the committed-mark counter."""
+    marks = np.zeros(contract.get_state().n_active, dtype=int)
     with pytest.raises(NotImplementedError):
         contract.predict_post_balance_count(marks)
 
@@ -341,3 +340,106 @@ def test_reinitialize_ic_preserves_adapted_mesh(contract):
     solver = contract._solver
     expected, _ = exact_solution(solver.coord, solver.npoin_dg, 0.0, solver.icase)
     np.testing.assert_allclose(solver.q, expected)
+
+def hold_marks(contract):
+    """All-HOLD marks aligned to the current active ordering."""
+    return np.full(contract.get_state().n_active, HOLD, dtype=int)
+
+
+# --- apply_marks (batch; Phase 7.5, D-043) ---------------------------------
+
+def test_apply_marks_all_hold_noop(contract):
+    st0 = contract.get_state()
+    ids0 = list(st0.element_id)
+    new_state = contract.apply_marks(hold_marks(contract))
+    assert isinstance(new_state, SolverState)
+    assert new_state.n_active == st0.n_active
+    assert list(new_state.element_id) == ids0
+
+
+def test_apply_marks_single_refine_grows(contract):
+    n0 = contract.get_state().n_active
+    marks = hold_marks(contract)
+    marks[0] = REFINE
+    new_state = contract.apply_marks(marks)
+    assert new_state.n_active == n0 + 1  # L0 refine, neighbors L0 → no cascade
+    assert_2to1_balanced(new_state)
+
+
+def test_apply_marks_complete_family_coarsens(contract):
+    """A parent collapses only when BOTH children are marked COARSEN."""
+    n0 = contract.get_state().n_active
+    refine_at(contract, 1)                      # make a 2-child family
+    st = contract.get_state()
+    fam = [i for i in range(st.n_active) if st.sibling[i] != -1]
+    assert len(fam) == 2
+    marks = np.full(st.n_active, HOLD, dtype=int)
+    for i in fam:
+        marks[i] = COARSEN
+    new_state = contract.apply_marks(marks)
+    assert new_state.n_active == n0
+    assert_2to1_balanced(new_state)
+
+
+def test_apply_marks_lone_coarsen_is_noop(contract):
+    """One sibling marked COARSEN is an incomplete family → no-op."""
+    refine_at(contract, 1)
+    st = contract.get_state()
+    n_pre, ids_pre = st.n_active, list(st.element_id)
+    fam = [i for i in range(st.n_active) if st.sibling[i] != -1]
+    marks = np.full(st.n_active, HOLD, dtype=int)
+    marks[fam[0]] = COARSEN                      # only ONE child
+    new_state = contract.apply_marks(marks)
+    assert new_state.n_active == n_pre
+    assert list(new_state.element_id) == ids_pre
+
+
+def test_apply_marks_ineligible_refine_ignored(contract):
+    """A REFINE mark on a max-level element is silently ignored."""
+    for _ in range(MAX_LEVEL):
+        contract.adapt_element(0, REFINE)
+        contract.balance()
+        contract.rebuild()
+    st = contract.get_state()
+    idx = int(np.argmax(st.level))
+    assert st.level[idx] == MAX_LEVEL and not st.can_refine[idx]
+    n_pre = st.n_active
+    marks = np.full(st.n_active, HOLD, dtype=int)
+    marks[idx] = REFINE
+    new_state = contract.apply_marks(marks)
+    assert new_state.n_active == n_pre           # no growth from the dead mark
+
+
+def test_apply_marks_enforces_balance_with_cascade(contract):
+    """One batch refine of an L1-next-to-L0 element forces a 2:1 cascade that
+    apply_marks resolves in its single global balance pass."""
+    refine_at(contract, 1)
+    st = contract.get_state()
+    target = next(
+        (i for i in range(st.n_active)
+         if st.level[i] == 1 and (st.level[int(st.left[i])] == 0
+                                  or st.level[int(st.right[i])] == 0)),
+        None,
+    )
+    assert target is not None
+    marks = np.full(st.n_active, HOLD, dtype=int)
+    marks[target] = REFINE
+    new_state = contract.apply_marks(marks)
+    assert new_state.n_active > st.n_active + 1   # grew beyond the lone marked refine
+    assert_2to1_balanced(new_state)
+
+
+def test_apply_marks_returns_consistent_state(contract):
+    marks = hold_marks(contract)
+    marks[0] = REFINE
+    new_state = contract.apply_marks(marks)
+    assert new_state.n_active == len(contract._solver.active)
+    for arr in (new_state.element_id, new_state.level, new_state.left,
+                new_state.right, new_state.sibling,
+                new_state.can_refine, new_state.can_coarsen):
+        assert len(arr) == new_state.n_active
+
+
+def test_apply_marks_rejects_wrong_shape(contract):
+    with pytest.raises(ValueError):
+        contract.apply_marks(np.zeros(3, dtype=int))  # base n_active == 4

@@ -21,15 +21,18 @@ Spaces (lifted verbatim from the old env; Architecture Spec Section 6.2):
     action_space      = Discrete(3)   [0 coarsen, 1 hold, 2 refine]
     observation_space = Box(8,)       per-component bounds below
 
-NOTE (loose obs lower bound — carried over verbatim, flagged for reconciliation).
+NOTE (obs bounds — reconciled post-parity; see DECISION_LOG D-053).
 Components [0:3] are alpha-normalized log-errors whose boundary is o = -1 and
-which are NEGATIVE across the healthy operating regime (alpha * e_inf < 1). The
-declared low = 0.0 on those three components is therefore too tight: real
-observations routinely fall below it. This matches the old env exactly (the
-bound was wrong there too); it never surfaced because SB3 does not validate obs
-against the Box at train time. Kept verbatim here to hold the D-038 parity line;
-reconcile to low = -inf as a deliberate, logged change AFTER the parity gate, not
-silently now. (gymnasium.utils.env_checker would flag this — see the test note.)
+which are NEGATIVE across the healthy operating regime (alpha * e_inf < 1), so
+their low is -inf (o -> -inf as e_k -> 0). resource_usage [6] has high = inf:
+n_active / budget can exceed 2.0 once the unmasked mesh grows past 2x the soft
+budget. Both were carried verbatim from the old dg_amr_env_multiround.py
+(low = 0.0, high = 2.0 — too tight there too) and held through the D-038/D-052
+parity gate so the declared interface matched the target exactly; widened only
+AFTER v0.1-parity was tagged (D-053). The change is metadata-only — SB3 feeds
+the raw obs vector to MlpPolicy, so the Box bounds are read only by env-checkers
+and by normalization/clipping wrappers (none in use); widening removes a latent
+VecNormalize/obs-clip trap without altering any emitted observation.
 """
 from __future__ import annotations
 
@@ -74,24 +77,26 @@ class MultiroundEnv(gym.Env):
         # NOT masked — the agent learns conservation via resource_usage + reward.
         self.action_space = spaces.Discrete(3)
 
-        # Observation space — 8 components, lifted verbatim from the old env.
-        # The per-component bounds are not recoverable from OBS_DIM alone, so
-        # they are declared here. See the module-level NOTE on the [0:3] lows.
+        # Observation space — 8 components, lifted from the old env, bounds
+        # reconciled post-parity (D-053). The per-component bounds are not
+        # recoverable from OBS_DIM alone, so they are declared here. See the
+        # module-level NOTE on the [0:3] and [6] bounds.
         #   Index | Component              | Declared range
         #   ------|------------------------|----------------
-        #     0   | alpha-normalized error | [0, inf)   (actually can be < 0)
-        #     1   | left neighbor error    | [0, inf)   (actually can be < 0)
-        #     2   | right neighbor error   | [0, inf)   (actually can be < 0)
+        #     0   | alpha-normalized error | (-inf, inf)
+        #     1   | left neighbor error    | (-inf, inf)
+        #     2   | right neighbor error   | (-inf, inf)
         #     3   | refinement level       | [0, 1]
         #     4   | left neighbor level    | [0, 1]
         #     5   | right neighbor level   | [0, 1]
-        #     6   | resource_usage         | [0, 2]     (can exceed 1.0)
+        #     6   | resource_usage         | [0, inf)
         #     7   | round_progress         | [0, 1]
         self.observation_space = spaces.Box(
-            low=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array([np.inf, np.inf, np.inf, 1.0, 1.0, 1.0, 2.0, 1.0], dtype=np.float32),
+            low=np.array([-np.inf, -np.inf, -np.inf, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([np.inf, np.inf, np.inf, 1.0, 1.0, 1.0, np.inf, 1.0], dtype=np.float32),
             dtype=np.float32,
         )
+        
 
         # Guard against env/core drift: the declared space must match the
         # length of the vector the core actually emits.

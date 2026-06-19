@@ -206,8 +206,9 @@ class AgentCore:
     def apply_round(self) -> SolverState:
         """Batch apply: one pass (global balance + single rebuild) via the contract.
 
-        NOTE: contract.apply_marks is a post-parity stub (P-015) and currently
-        raises NotImplementedError on the python_1d backend.
+        Implemented on the python_1d backend as of Phase 7.5 (D-043);
+        predict_post_balance_count remains a stub, so budget accounting uses the
+        committed-mark counter.
         """
         if self.mode != MODE_BATCH:
             raise RuntimeError("apply_round is only valid in batch mode")

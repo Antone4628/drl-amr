@@ -189,13 +189,71 @@ class Python1DSolverContract:
     def rebuild(self) -> None:
         self._solver._update_matrices()
 
-    # --- Adaptation (batch; deferred past Phase 4 — D-043) -----------------
+    # --- Adaptation (batch; one pass, global balance, single rebuild — D-043) ---
     def apply_marks(self, marks: np.ndarray) -> SolverState:
-        raise NotImplementedError(
-            "Batch mode (apply_marks) is the D-043 seam, deferred past Phase 4. "
-            "The sequential triad adapt_element -> balance -> rebuild is the "
-            "parity target; the old env never drove batch mode."
-        )
+        marks = np.asarray(marks)
+        solver = self._solver
+
+        # Pre-round snapshot. marks[i] pairs with state.element_id[i] / active[i]
+        # (no mutation has happened since begin_round built the marks). Every
+        # refine/coarsen below shifts the active ordering, so all decisions are
+        # recorded by stable element_id now and positions are re-resolved just
+        # before each operation.
+        state = self.get_state()
+        active_pre = [int(e) for e in solver.active]
+        n = len(active_pre)
+        if marks.shape != (n,):
+            raise ValueError(f"marks shape {marks.shape} != (n_active={n},)")
+
+        # Refine: each REFINE-marked element that is structurally refinable.
+        refine_ids = [
+            active_pre[i] for i in range(n) if marks[i] == REFINE and state.can_refine[i]
+        ]
+
+        # Coarsen: a parent collapses iff its COMPLETE sibling family is all
+        # marked COARSEN and eligible (D-043/D-044 complete-family rule, the
+        # dimension-agnostic form). 1D: both siblings. coarsen_element() merges
+        # the adjacent pair in one call, so record one representative child id
+        # per parent (dedup so the family is not processed twice).
+        coarsen_rep_ids: list[int] = []
+        seen_parents: set[int] = set()
+        for i in range(n):
+            if marks[i] != COARSEN:
+                continue
+            s = int(state.sibling[i])
+            if s == -1 or marks[s] != COARSEN or not state.can_coarsen[i]:
+                continue  # lone / partial-family / ineligible coarsen — no-op
+            parent_id = int(solver.label_mat[active_pre[i] - 1][1])
+            if parent_id in seen_parents:
+                continue
+            seen_parents.add(parent_id)
+            coarsen_rep_ids.append(active_pre[i])
+
+        # Apply (re-resolve element_id -> current position each time). Refine and
+        # coarsen target sets are disjoint and re-resolution is order-proof, so
+        # the order is immaterial; refines first by convention.
+        for elem_id in refine_ids:
+            pos = self._active_pos(elem_id)
+            if pos is not None:
+                solver.refine_element(pos)
+        for elem_id in coarsen_rep_ids:
+            pos = self._active_pos(elem_id)
+            if pos is not None:
+                solver.coarsen_element(pos)  # auto-finds + merges the adjacent sibling
+
+        # One global 2:1 balance + one operator rebuild (mirrors the sequential
+        # balance() + rebuild(), amortized to once per round). No cascade set is
+        # returned: all marks were decided on one pre-round snapshot, so there is
+        # no "later in the round" to protect (D-043).
+        solver.balance_mesh(balance=True)
+        solver._update_matrices()
+        return self.get_state()
+
+    def _active_pos(self, elem_id: int) -> int | None:
+        """Current active-array position of a stable element_id, or None if it
+        was consumed earlier this pass (e.g. by a coarsen)."""
+        matches = np.where(np.asarray(self._solver.active) == elem_id)[0]
+        return int(matches[0]) if len(matches) else None
 
     def predict_post_balance_count(self, marks: np.ndarray) -> int:
         raise NotImplementedError(

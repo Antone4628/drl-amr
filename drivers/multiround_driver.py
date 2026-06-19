@@ -17,10 +17,10 @@ Mode-aware (D-043). Per-element execution dispatches on core.mode:
   sequential (default, parity target): core.execute_now per element (one rebuild
     each); the driver folds the returned cascade into consumed_elements and
     re-reads state before the next element.
-  batch (post-parity, P-015; structurally present, exercised at Phase 7.5):
-    core.stage_flag per element, then core.apply_round once at round end (one
-    global balance + rebuild). apply_marks is currently a stub, so batch does
-    not yet run end to end.
+  batch (post-parity, P-015; exercised at Phase 7.5): core.stage_flag per
+    element, then core.apply_round once at round end (one global balance +
+    rebuild). apply_marks is implemented on python_1d (Phase 7.5); batch runs
+    end to end.
 
 The sequential path is extracted verbatim from dg_amr_env_multiround.py's
 step / reset / _advance_queue / _advance_solver / _start_new_interval; the D-038
