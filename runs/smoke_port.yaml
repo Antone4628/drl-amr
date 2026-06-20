@@ -1,0 +1,11 @@
+git_commit: f14d8cbc602512f57c1e24defe93b0c98b6df8f1
+git_dirty: true
+config_path: /Users/antonechacartegui/projects/drl-amr/results/smoke_port/config.yaml
+seed: 42
+created_at: '2026-06-16T14:17:50.161416+00:00'
+python: 3.11.11
+platform: macOS-15.7.3-arm64-arm-64bit
+run_id: smoke_port
+results_dir: /Users/antonechacartegui/projects/drl-amr/results/smoke_port
+total_timesteps: 2000
+error_indicator: zz_style
