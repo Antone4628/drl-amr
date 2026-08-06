@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-06-18 06:46:48
+Generated: 2026-08-06 13:19:01
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -90,7 +90,9 @@ drl-amr/
 │   │   │   ├── test_projection_exactness.py
 │   │   │   └── test_zz_projection_sanity.py
 │   │   ├── dg/
-│   │   │   └── test_matrices.py
+│   │   │   ├── test_convergence.py
+│   │   │   ├── test_matrices.py
+│   │   │   └── test_operator.py
 │   │   ├── solvers/
 │   │   │   ├── test_dg_advection_solver_multiround.py
 │   │   │   ├── test_error_indicators_plumbing.py
@@ -103,6 +105,9 @@ drl-amr/
 ├── tools/
 │   ├── __init__.py
 │   ├── balance_test.py
+│   ├── convergence_study.py
+│   ├── dump_dg_operator.py
+│   ├── plot_dg_1d.py
 │   ├── projection_exactness.py
 │   ├── run_manifest.py
 │   ├── tree_gen.py

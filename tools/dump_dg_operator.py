@@ -11,6 +11,23 @@ import numpy as np
 
 from tools.convergence_study import make_solver
 
+def build_operator(icase=8, nop=4, nelem=50, nq_mode="collocated"):
+    """Return (solver, L) where L is the assembled semi-discrete operator.
+
+    Raises if the periodic wrap is welded: step() contains a conditional
+    `qp[-1] = qp[0]` living OUTSIDE Dhat, so a clean operator cannot expose
+    it -- the same defect shape found in Jexpresso 2026-07-27 (fixed in
+    586e7ba3). It must be asserted separately, here, every time.
+    """
+    s = make_solver(icase, nop, nelem, nq_mode)
+    if s.periodicity[-1] == s.periodicity[0]:
+        raise AssertionError(
+            "PERIODIC WRAP IS WELDED -- periodicity[0] == periodicity[-1], "
+            "so step() would overwrite the last DOF with the first. The "
+            "Python reference has the Jexpresso wrap defect."
+        )
+    return s, np.asarray(s.Dhat, dtype=float)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -22,18 +39,17 @@ def main():
     ap.add_argument("--outdir", default="tools")
     a = ap.parse_args()
 
-    s = make_solver(a.icase, a.nop, a.nelem, a.nq_mode)
+    
+    s, L = build_operator(a.icase, a.nop, a.nelem, a.nq_mode)
+    print(f"periodicity[0]  = {s.periodicity[0]}")
+    print(f"periodicity[-1] = {s.periodicity[-1]}   welded = False")
 
     # step() contains `qp[-1] = qp[0]` guarded by this condition -- a welded
     # periodic wrap, the same defect found in Jexpresso 2026-07-27. For DG it
     # must be False. Asserted, not assumed: it lives outside Dhat, so a clean
     # operator would not expose it.
-    welded = (s.periodicity[-1] == s.periodicity[0])
-    print(f"periodicity[0]  = {s.periodicity[0]}")
-    print(f"periodicity[-1] = {s.periodicity[-1]}   welded = {welded}")
-    assert not welded, "PERIODIC WRAP IS WELDED -- Python reference has the Jexpresso defect"
 
-    L = np.asarray(s.Dhat, dtype=float)
+
     print(f"Dhat shape = {L.shape}   npoin_dg = {s.npoin_dg}   "
           f"nelem*ngl = {s.nelem * s.ngl}")
     print(f"wave_speed = {s.wave_speed}   ngl = {s.ngl}   nq = {s.nq}")
