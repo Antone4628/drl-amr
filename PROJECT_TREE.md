@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-08-06 13:19:01
+Generated: 2026-08-16 11:10:20
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -103,6 +103,8 @@ drl-amr/
 │   │   └── test_train_config.py
 │   └── __init__.py
 ├── tools/
+│   ├── jexpresso/
+│   │   └── meshes/
 │   ├── __init__.py
 │   ├── balance_test.py
 │   ├── convergence_study.py
@@ -112,10 +114,12 @@ drl-amr/
 │   ├── run_manifest.py
 │   ├── tree_gen.py
 │   └── visual_eval.py
-└── training/
-    ├── __init__.py
-    ├── diagnostics.py
-    └── train_multiround.py
+├── training/
+│   ├── __init__.py
+│   ├── diagnostics.py
+│   └── train_multiround.py
+└── verification/
+    └── dg_1d/
 ```
 
 ---
