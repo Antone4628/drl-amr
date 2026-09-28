@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-08-16 11:10:20
+Generated: 2026-09-28 14:38:23
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -75,6 +75,10 @@ drl-amr/
 │   ├── deployment/
 │   │   ├── test_evaluator.py
 │   │   └── test_runner.py
+│   ├── dg_2d/
+│   │   ├── test_analytic_operator_2d.py
+│   │   ├── test_bracket_2d.py
+│   │   └── test_gate_2d_mortar.py
 │   ├── drivers/
 │   │   └── test_driver.py
 │   ├── envs/
@@ -106,9 +110,14 @@ drl-amr/
 │   ├── jexpresso/
 │   │   └── meshes/
 │   ├── __init__.py
+│   ├── analytic_operator_2d.py
+│   ├── analytic_operator_2d_mortar.py
 │   ├── balance_test.py
+│   ├── bracket_2d.py
 │   ├── convergence_study.py
 │   ├── dump_dg_operator.py
+│   ├── gate_2d_compare.py
+│   ├── gate_2d_mortar.py
 │   ├── plot_dg_1d.py
 │   ├── projection_exactness.py
 │   ├── run_manifest.py
