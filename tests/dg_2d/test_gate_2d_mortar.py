@@ -27,6 +27,15 @@ What each group pins:
      stray coupling; a corrupted mass; a mismatched ad_lvl.
   5. Check [10] is informational: it reads ~0 on a correct operator, flags a
      defective one, and never changes the verdict.
+  6. Mortars across the periodic wrap (item 8b step 5, D-079): the five
+     wrap-refined meshes pass with their expected wrap-half counts and are
+     refused by the default expectation of none; a wrong half on the wrap
+     parent faces only is caught by the wrap rows of check [6] -- in both
+     directions (children upwind: project; parent upwind: interp) -- while
+     the inflow-safe rows and conservation stay blind to it; and the
+     detection matrix on a wrap mesh, which differs from the interior one in
+     exactly one row (WRAP_DETECTION: a central wrap flux is seen by
+     exactness too, through the upwind side's outflow face).
 
 The spec-built operator takes face contacts from the instrument's own Mesh2
 topology; group 2 pins that topology against hand-counted values, which is
@@ -53,7 +62,7 @@ from tools.analytic_operator_2d_mortar import (
     geometric_mass,
     projection_1d,
 )
-from tools.gate_2d_mortar import Mesh2, run_gate, safe_elements
+from tools.gate_2d_mortar import EXACT_TOL, Mesh2, run_gate, safe_elements, wrap_inflow_axes
 
 NGL = GATE_NOP + 1
 REFINED_CELL = (2, 2)   # x in [0, 2.5], y in [10, 15] -- the item-3 case
@@ -332,3 +341,116 @@ def test_2to1_in_jexpresso_element_order():
                              expect_nelem=19, expect_mortar_halves=8)
         assert failures == []
         assert rep["spec"]["max_diff"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 6. mortars across the periodic wrap (item 8b step 5)
+# ---------------------------------------------------------------------------
+
+# Refined base cell -> mortar halves across the wrap. With c > 0 in both
+# components (both legs) a refined element on the HIGH side of a wrap has its
+# children upwind of the wrap mortar (the parent row tests project); on the
+# LOW side the parent is upwind (the children rows test interp). The five
+# meshes cover both directions on both axes; corner_mixed is the corner the
+# item-8b step-5 run refines (AMR_NATIVE_PREADAPT=corner).
+WRAP_MESHES = {
+    "corner_hi": ((3, 3), 4),     # x in [2.5, 5], y in [15, 20]: x-project, y-project
+    "corner_lo": ((0, 0), 4),     # x in [-5, -2.5], y in [0, 5]: x-interp, y-interp
+    "corner_mixed": ((3, 0), 4),  # x in [2.5, 5], y in [0, 5]: x-project, y-interp
+    "x_lo": ((0, 2), 2),          # x in [-5, -2.5], y in [10, 15]: x-interp
+    "y_hi": ((1, 3), 2),          # x in [-2.5, 0], y in [15, 20]: y-project
+}
+
+
+def _wrap_rows_max(rep):
+    return max(v for wset in rep["exactness"]["wrap"].values() for v in wset["res"].values())
+
+
+def test_wrap_mortar_topology_and_pass():
+    adlvl = [0] * 15 + [1] * 4
+    for name, (cell, n_wrap) in WRAP_MESHES.items():
+        boxes = boxes_2to1(refined=cell)
+        x, y = nodes_from_boxes(boxes)
+        mesh = Mesh2(x, y, GATE_NOP, GATE_DOMAIN, GATE_NEX, GATE_NEY)
+        kinds = [(c["kind"], c["periodic"]) for c in mesh.contacts]
+        assert kinds.count(("mortar", True)) == n_wrap, name
+        assert kinds.count(("mortar", False)) == 8 - n_wrap, name
+        assert kinds.count(("conforming", True)) == 8 - n_wrap // 2, name
+        for cx, cy in LEGS:
+            L, x, y, M = assemble(boxes, cx, cy)
+            failures, rep = gate(L, x, y, M=M, adlvl=adlvl, cx=cx, cy=cy,
+                                 expect_nelem=19, expect_mortar_halves=8,
+                                 expect_wrap_mortar_halves=n_wrap)
+            assert failures == [], (name, cx, cy, failures)
+            assert rep["n_wrap_mortar_halves"] == n_wrap
+            ex = rep["exactness"]
+            w = ex["wrap"]
+            assert ex["n_elems"] + w["x"]["n_elems"] + w["y"]["n_elems"] + w["xy"]["n_elems"] == 19
+            assert w["x"]["n_elems"] > 0 and w["y"]["n_elems"] > 0 and w["xy"]["n_elems"] == 1
+            assert _wrap_rows_max(rep) < EXACT_TOL
+            # the default expectation (no mortar across the wrap) refuses the mesh
+            failures, _ = gate(L, x, y, M=M, adlvl=adlvl, cx=cx, cy=cy)
+            assert failures == ["geometry"], (name, cx, cy, failures)
+
+
+def test_wrap_inflow_axes_partition():
+    """Every element has exactly one row set: safe, x-wrap, y-wrap or both."""
+    for name, (cell, _) in WRAP_MESHES.items():
+        x, y = nodes_from_boxes(boxes_2to1(refined=cell))
+        mesh = Mesh2(x, y, GATE_NOP, GATE_DOMAIN, GATE_NEX, GATE_NEY)
+        for cx, cy in LEGS:
+            axes = wrap_inflow_axes(mesh, cx, cy)
+            counts = {}
+            for s in axes.values():
+                counts[frozenset(s)] = counts.get(frozenset(s), 0) + 1
+            assert sum(counts.values()) == 19, name
+            assert len(safe_elements(mesh, cx, cy)) == counts.get(frozenset(), 0), name
+
+
+def test_wrong_half_across_the_wrap_caught_by_wrap_rows():
+    """A wrong half on the parent faces across the wrap only. Interior mortars
+    are correct, so the inflow-safe rows of [6] cannot see it; conservation is
+    blind to a same-wrong-flux-both-sides defect; the wrap rows see it -- in
+    both directions on both axes."""
+    for name, (cell, n_wrap) in WRAP_MESHES.items():
+        boxes = boxes_2to1(refined=cell)
+        for cx, cy in LEGS:
+            L, x, y, M = assemble(boxes, cx, cy, mutate="wrong_half_wrap")
+            failures, rep = gate(L, x, y, M=M, cx=cx, cy=cy,
+                                 expect_wrap_mortar_halves=n_wrap)
+            assert "exactness" in failures, (name, cx, cy, failures)
+            assert "conservation" not in failures, (name, cx, cy, failures)
+            assert max(rep["exactness"]["res"].values()) < EXACT_TOL, (name, cx, cy)
+            assert _wrap_rows_max(rep) > 1e-3, (name, cx, cy)
+            assert rep["spec"]["n_over"] > 0
+
+
+# The detection matrix on a mesh whose mortars include wrap ones (measured
+# 2026-10-15, both legs). One row changes: a CENTRAL mortar flux couples both
+# ways, so the element upwind of a wrap mortar sees its downwind neighbour's
+# trace across the wrap -- and x^a at x = 5 is not x^a at x = -5. On the
+# interior mesh that reverse coupling carries a continuous polynomial and is
+# invisible to exactness; across the wrap it is a jump on the upwind side's
+# OUTFLOW face, which the rows tested with the other axis's family see
+# (corner_lo: both wrap sets), or the safe rows see when the upwind parent is
+# interior-safe (x_lo). The upwind flux never couples through an outflow
+# face, so a correct operator is unaffected.
+WRAP_DETECTION = dict(DETECTION, central={"support", "exactness"})
+
+
+def test_wrap_mesh_detection_matrix():
+    for name in ("corner_lo", "x_lo"):
+        cell, n_wrap = WRAP_MESHES[name]
+        for cx, cy in LEGS:
+            for mutate, expected in WRAP_DETECTION.items():
+                L, x, y, M = assemble(boxes_2to1(refined=cell), cx, cy, mutate=mutate)
+                failures, rep = gate(L, x, y, M=M, cx=cx, cy=cy,
+                                     expect_wrap_mortar_halves=n_wrap)
+                assert set(failures) == expected, (name, cx, cy, mutate, failures)
+                if mutate == "central":
+                    safe_max = max(rep["exactness"]["res"].values())
+                    wrap_max = _wrap_rows_max(rep)
+                    if name == "corner_lo":
+                        assert safe_max < EXACT_TOL and wrap_max > 1e-3, (name, cx, cy)
+                    else:
+                        assert safe_max > 1e-3, (name, cx, cy)

@@ -25,7 +25,11 @@ Checks:
   [2] geometry          element boxes from their nodes; every node on its box's
                         LGL lattice; boxes tile the domain; levels from size,
                         equal to the dumped ad_lvl; face topology incl. the
-                        periodic wrap; every element side covered exactly once
+                        periodic wrap; every element side covered exactly once;
+                        the number of mortar halves ACROSS THE WRAP equals
+                        --expect-wrap-mortar-halves (default 0 -- the item-7
+                        interior mesh; the item-8b wrap-mortar gate passes
+                        its own count, D-079)
   [3] mass              dumped M vs w_i*w_j*Jvol(e) from geometry
   [4] far rows          rows of level-0 elements with no mortar side vs the
                         analytic conforming operator, columns mapped by geometry
@@ -33,7 +37,13 @@ Checks:
                         mortar half's forward block nonzero, reverse block zero
   [6] exactness         L u = -c.grad u for global polynomials of degree <= nop
                         per variable, on rows whose inflow faces are all
-                        non-periodic; degree-(nop+1) controls must fail
+                        non-periodic; degree-(nop+1) controls must fail. Rows
+                        whose inflow crosses the wrap along one axis are tested
+                        with the polynomials periodic in that axis (y^b for an
+                        x-wrap inflow, x^a for a y-wrap inflow, the constant for
+                        both), which is exactly what a wrap mortar's tangential
+                        scatter/gather must reproduce; same tolerance, with the
+                        control along the tested axis
   [7] conservation      w^T L with w = M
   [8] consistency       L 1
   [9] spectrum          max Re(lambda) <= 0, one kernel mode at 1e-10*rho
@@ -50,7 +60,8 @@ Why [5] and [6] exist (explanation doc, Phase 6 section 7): conservation is
 blind to any mortar defect that uses the same wrong flux on both sides (a
 wrong half, a wrong interp); polynomial exactness sees it. Upwinding makes
 each mortar face one-directional, so the reverse coupling blocks are
-predictably zero.
+predictably zero. The wrap rows of [6] (item 8b step 5) extend that to a
+mortar across the periodic wrap, where conservation is equally blind.
 
 Run -- the item-7 static 2:1 case (4x4 gate mesh, one element refined):
 
@@ -59,9 +70,11 @@ Run -- the item-7 static 2:1 case (4x4 gate mesh, one element refined):
     python -m tools.gate_2d_mortar --dir <abs path to the probe's output dir> \
         --expect-nelem 19 --expect-mortar-halves 8
 
-Leg 2 adds --cx 0.7 --cy 0.3. On the conforming 4x4 gate dumps (the named
-regression of this instrument) drop the --expect flags; with no mass/adlvl
-files the geometric mass is used and the ad_lvl cross-check is skipped.
+Leg 2 adds --cx 0.7 --cy 0.3. The item-8b wrap-mortar preadapts add
+--expect-wrap-mortar-halves 2 (one wrap face refined) or 4 (a corner element).
+On the conforming 4x4 gate dumps (the named regression of this instrument)
+drop the --expect flags; with no mass/adlvl files the geometric mass is used
+and the ad_lvl cross-check is skipped.
 """
 
 import argparse
@@ -314,7 +327,8 @@ def _support(L, mesh, cx, cy):
         tu, td = mesh.trace(eu, su), mesh.trace(ed, sd)
         fwd = float(np.max(np.abs(L[np.ix_(td, tu)])))
         rev = float(np.max(np.abs(L[np.ix_(tu, td)])))
-        halves.append(dict(up=eu, down=ed, axis=c["axis"], fwd=fwd, rev=rev,
+        halves.append(dict(up=eu, down=ed, axis=c["axis"], periodic=c["periodic"],
+                           fwd=fwd, rev=rev,
                            up_level=int(mesh.level[eu]), down_level=int(mesh.level[ed])))
     return dict(scale=scale, n_outside=n_out, worst_outside=worst, halves=halves)
 
@@ -328,40 +342,76 @@ def _poly(mesh, a, b):
     return u, ux, uy
 
 
+def wrap_inflow_axes(mesh, cx, cy):
+    """Per element, the set of axes (0 = x, 1 = y) along which it has an
+    inflow contact that crosses the periodic wrap. A global polynomial is
+    continuous everywhere an element with an empty set can see; an element
+    with {0} sees a jump only across the x-wrap, which a polynomial constant
+    in x does not have."""
+    axes = {e: set() for e in range(mesh.nelem)}
+    for c in mesh.contacts:
+        up = _upwind(c, cx, cy)
+        if up is None or not c["periodic"]:
+            continue
+        axes[up[2]].add(c["axis"])
+    return axes
+
+
 def safe_elements(mesh, cx, cy):
     """Elements none of whose inflow contacts cross the periodic wrap: a global
     polynomial is continuous everywhere such an element can see."""
-    bad = set()
-    for c in mesh.contacts:
-        up = _upwind(c, cx, cy)
-        if up is None:
-            continue
-        if c["periodic"]:
-            bad.add(up[2])
-    return [e for e in range(mesh.nelem) if e not in bad]
+    axes = wrap_inflow_axes(mesh, cx, cy)
+    return [e for e in range(mesh.nelem) if not axes[e]]
+
+
+def _rows_of(mesh, elems):
+    return np.array([mesh.dof(e, i, j) for e in elems
+                     for j in range(mesh.ngl) for i in range(mesh.ngl)], dtype=int)
+
+
+def _residuals(L, mesh, rows, cx, cy, polys):
+    """Max |L u + c.grad u| over rows, relative to max|L[rows]|*max|u| --
+    the operator scale, so a coupling error of relative size eps shows up at
+    ~eps and round-off at ~1e-15. Empty when rows is empty."""
+    if len(rows) == 0 or not polys:
+        return {}
+    scale_L = float(np.max(np.abs(L[rows])))
+    res = {}
+    for a, b in polys:
+        u, ux, uy = _poly(mesh, a, b)
+        r = (L @ u)[rows] + (cx * ux + cy * uy)[rows]
+        res[(a, b)] = float(np.max(np.abs(r)) / (scale_L * max(np.max(np.abs(u)), 1e-300)))
+    return res
+
+
+# The three wrap-inflow row sets of check [6]: the inflow axes of the rows, the
+# polynomial family periodic in those axes, and its degree-(nop+1) control.
+WRAP_SETS = (
+    ("x", {0}, lambda nop: [(0, b) for b in range(nop + 1)], lambda nop: [(0, nop + 1)]),
+    ("y", {1}, lambda nop: [(a, 0) for a in range(nop + 1)], lambda nop: [(nop + 1, 0)]),
+    ("xy", {0, 1}, lambda nop: [(0, 0)], lambda nop: []),
+)
 
 
 def _exactness(L, mesh, cx, cy):
-    """Residual of L u + c.grad u on safe rows, relative to max|L|*max|u|
-    over those rows -- the operator scale, so a coupling error of relative
-    size eps shows up at ~eps and round-off at ~1e-15."""
-    rows = [mesh.dof(e, i, j) for e in safe_elements(mesh, cx, cy)
-            for j in range(mesh.ngl) for i in range(mesh.ngl)]
-    rows = np.array(rows, dtype=int)
-    scale_L = float(np.max(np.abs(L[rows])))
-    res = {}
-    for a in range(mesh.nop + 1):
-        for b in range(mesh.nop + 1):
-            u, ux, uy = _poly(mesh, a, b)
-            r = (L @ u)[rows] + (cx * ux + cy * uy)[rows]
-            res[(a, b)] = float(np.max(np.abs(r)) / (scale_L * max(np.max(np.abs(u)), 1e-300)))
-    ctrl = {}
-    for a, b in ((mesh.nop + 1, 0), (0, mesh.nop + 1)):
-        u, ux, uy = _poly(mesh, a, b)
-        r = (L @ u)[rows] + (cx * ux + cy * uy)[rows]
-        ctrl[(a, b)] = float(np.max(np.abs(r)) / (scale_L * np.max(np.abs(u))))
-    return dict(n_rows=len(rows), n_elems=len(rows) // mesh.ngl ** 2,
-                res=res, ctrl=ctrl)
+    """Residual of L u + c.grad u on the inflow-safe rows for every x^a y^b,
+    a, b <= nop, plus, per wrap-inflow row set, the family periodic in the
+    rows' inflow axes (WRAP_SETS)."""
+    nop = mesh.nop
+    axes = wrap_inflow_axes(mesh, cx, cy)
+    safe = [e for e in range(mesh.nelem) if not axes[e]]
+    rows = _rows_of(mesh, safe)
+    res = _residuals(L, mesh, rows, cx, cy,
+                     [(a, b) for a in range(nop + 1) for b in range(nop + 1)])
+    ctrl = _residuals(L, mesh, rows, cx, cy, [(nop + 1, 0), (0, nop + 1)])
+    wrap = {}
+    for key, want, family, control in WRAP_SETS:
+        elems = [e for e in range(mesh.nelem) if axes[e] == want]
+        wrows = _rows_of(mesh, elems)
+        wrap[key] = dict(n_elems=len(elems),
+                         res=_residuals(L, mesh, wrows, cx, cy, family(nop)),
+                         ctrl=_residuals(L, mesh, wrows, cx, cy, control(nop)))
+    return dict(n_rows=len(rows), n_elems=len(safe), res=res, ctrl=ctrl, wrap=wrap)
 
 
 def _far_rows(L, mesh, cx, cy):
@@ -414,9 +464,12 @@ def _far_rows(L, mesh, cx, cy):
 
 def run_gate(L, x, y, M=None, adlvl=None, nop=GATE_NOP, domain=GATE_DOMAIN,
              nex=GATE_NEX, ney=GATE_NEY, cx=GATE_CX, cy=GATE_CY,
-             expect_nelem=None, expect_mortar_halves=None, verbose=True):
+             expect_nelem=None, expect_mortar_halves=None,
+             expect_wrap_mortar_halves=0, verbose=True):
     """All checks; returns (failures, report). Usable on arrays (the tests)
-    and from main() on the probe's files."""
+    and from main() on the probe's files. expect_wrap_mortar_halves: the
+    number of mortar halves across the periodic wrap that check [2] must
+    find (0 on the item-7 interior mesh); None lifts the constraint."""
     out = print if verbose else (lambda *a, **k: None)
     failures = []
     rep = {}
@@ -461,9 +514,11 @@ def run_gate(L, x, y, M=None, adlvl=None, nop=GATE_NOP, domain=GATE_DOMAIN,
     n_conf_per = kinds.get(("conforming", True), 0)
     n_mortar = kinds.get(("mortar", False), 0) + kinds.get(("mortar", True), 0)
     n_mortar_per = kinds.get(("mortar", True), 0)
-    ok = lvl_ok and n_mortar_per == 0
+    ok = lvl_ok
     if expect_mortar_halves is not None:
         ok = ok and n_mortar == expect_mortar_halves
+    if expect_wrap_mortar_halves is not None:
+        ok = ok and n_mortar_per == expect_wrap_mortar_halves
     refined = mesh.box[mesh.level > 0]
     patch = (f"x [{refined[:, 0].min():g}, {refined[:, 1].max():g}], "
              f"y [{refined[:, 2].min():g}, {refined[:, 3].max():g}]") if len(refined) else "none"
@@ -471,10 +526,11 @@ def run_gate(L, x, y, M=None, adlvl=None, nop=GATE_NOP, domain=GATE_DOMAIN,
         f"{levels} (ad_lvl {'absent' if adlvl is None else ('match' if lvl_ok else 'MISMATCH')}); "
         f"refined patch {patch}")
     out(f"    contacts: {n_conf_int} conforming interior + {n_conf_per} conforming periodic "
-        f"+ {n_mortar} mortar halves ({n_mortar_per} across the wrap)"
+        f"+ {n_mortar} mortar halves ({n_mortar_per} across the wrap"
+        f"{'' if expect_wrap_mortar_halves is None else f', expected {expect_wrap_mortar_halves}'})"
         f"{'' if expect_mortar_halves is None else f', expected {expect_mortar_halves} halves'}; "
         f"every side covered once  {verdict(ok, 'geometry')}")
-    rep.update(mesh=mesh, levels=levels)
+    rep.update(mesh=mesh, levels=levels, n_wrap_mortar_halves=n_mortar_per)
 
     # [3] mass
     wgl = mesh.wgl
@@ -529,21 +585,33 @@ def run_gate(L, x, y, M=None, adlvl=None, nop=GATE_NOP, domain=GATE_DOMAIN,
         f"{verdict(ok, 'support')}")
     for h in sup["halves"]:
         who = "parent" if h["up_level"] < h["down_level"] else "child"
-        out(f"    {'x' if h['axis'] == 0 else 'y'}-face  upwind iel={h['up'] + 1} ({who}, "
+        out(f"    {'x' if h['axis'] == 0 else 'y'}-face{' across the wrap' if h['periodic'] else ''}"
+            f"  upwind iel={h['up'] + 1} ({who}, "
             f"lvl {h['up_level']}) -> iel={h['down'] + 1} (lvl {h['down_level']}): "
             f"forward {h['fwd']:.3e}, reverse {h['rev']:.3e}")
     rep["support"] = sup
 
     # [6] exactness
     ex = _exactness(L, mesh, cx, cy)
-    worst = max(ex["res"].values())
-    wkey = max(ex["res"], key=ex["res"].get)
-    cmin = min(ex["ctrl"].values())
-    ok = worst <= EXACT_TOL and cmin > CONTROL_MIN
+    worst = max(ex["res"].values(), default=0.0)
+    wkey = max(ex["res"], key=ex["res"].get) if ex["res"] else (0, 0)
+    cmin = min(ex["ctrl"].values(), default=float("inf"))
+    wrap_res = [v for wset in ex["wrap"].values() for v in wset["res"].values()]
+    wrap_ctrl = [v for wset in ex["wrap"].values() for v in wset["ctrl"].values()]
+    wrap_worst = max(wrap_res, default=0.0)
+    wrap_cmin = min(wrap_ctrl, default=float("inf"))
+    ok = (worst <= EXACT_TOL and cmin > CONTROL_MIN
+          and wrap_worst <= EXACT_TOL and wrap_cmin > CONTROL_MIN)
     out(f"[6] exactness: {ex['n_elems']} inflow-safe elements; max rel residual over "
         f"x^a y^b, a,b <= {nop}: {worst:.3e} (at a={wkey[0]}, b={wkey[1]}); controls "
         + ", ".join(f"({a},{b}) {v:.3e}" for (a, b), v in ex["ctrl"].items())
         + f"  {verdict(ok, 'exactness')}")
+    wx, wy, wxy = ex["wrap"]["x"], ex["wrap"]["y"], ex["wrap"]["xy"]
+    ctrl_txt = ", ".join(f"({a},{b}) {v:.3e}"
+                         for wset in (wx, wy) for (a, b), v in wset["ctrl"].items())
+    out(f"    wrap-inflow rows: {wx['n_elems']} elements across x tested with y^b, "
+        f"{wy['n_elems']} across y with x^a, {wxy['n_elems']} across both with the constant; "
+        f"max rel residual {wrap_worst:.3e}; controls {ctrl_txt if ctrl_txt else '-'}")
     rep["exactness"] = ex
 
     # [7]-[9] structural
@@ -614,6 +682,10 @@ def main(argv=None):
     ap.add_argument("--cy", type=float, default=GATE_CY)
     ap.add_argument("--expect-nelem", type=int, default=None)
     ap.add_argument("--expect-mortar-halves", type=int, default=None)
+    ap.add_argument("--expect-wrap-mortar-halves", type=int, default=0,
+                    help="mortar halves across the periodic wrap check [2] must find "
+                         "(default 0: the interior mesh of item 7); a negative value "
+                         "lifts the constraint")
     args = ap.parse_args(argv)
 
     op = _find(args.dir, "GATE2D_operator_*.txt")
@@ -621,6 +693,7 @@ def main(argv=None):
     ms = _find(args.dir, "GATE2D_mass_*.txt", required=False)
     lv = _find(args.dir, "GATE2D_adlvl_*.txt", required=False)
     domain = ((args.xmin, args.xmax), (args.ymin, args.ymax))
+    expect_wrap = None if args.expect_wrap_mortar_halves < 0 else args.expect_wrap_mortar_halves
 
     print("=" * 76)
     print(f"GATE 2D mortar (Phase-6 item 7): nop={args.nop} base {args.nex}x{args.ney} "
@@ -637,7 +710,8 @@ def main(argv=None):
                            domain=domain, nex=args.nex, ney=args.ney,
                            cx=args.cx, cy=args.cy,
                            expect_nelem=args.expect_nelem,
-                           expect_mortar_halves=args.expect_mortar_halves)
+                           expect_mortar_halves=args.expect_mortar_halves,
+                           expect_wrap_mortar_halves=expect_wrap)
     print("=" * 76)
     if failures:
         print(f"VERDICT: FAIL ({', '.join(failures)})")

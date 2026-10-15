@@ -28,6 +28,11 @@ onto child half h (h = 0 is Jexpresso's half 1, the upper half of the parent
 trace; h = 1 its half 2), and project[h] = 1/2 Mex^-1 interp[h]^T Mex with
 Mex the exact LGL-nodal mass matrix (Gauss-Legendre, ngl points).
 
+A face across the periodic wrap is handled like any other: the contact's
+tangential coordinates are shared by both sides, so parent/child and the
+halves are decided from them exactly as for an interior face (D-079, item
+8b: a 2:1 face across the wrap is a mortar).
+
 Uses: check [10] of tools/gate_2d_mortar.py (informational entrywise
 comparison), and the fixture of tests/dg_2d/test_gate_2d_mortar.py.
 
@@ -80,7 +85,9 @@ def build_spec_operator_2d(mesh, cx, cy, _mutate=None):
     contacts derived from a node dump), in that mesh's element and DOF order.
 
     _mutate is a TEST HOOK, never used by the gate: "wrong_half" (the other
-    half's interp and project, consistently on both sides), "double_half"
+    half's interp and project, consistently on both sides, on every parent
+    face), "wrong_half_wrap" (the same, on the parent faces across the
+    periodic wrap only -- interior mortars stay correct), "double_half"
     (project without its 1/2), "uncoupled" (mortar faces skipped), "central"
     (lambda = 0 in the mortar flux only)."""
     nop, ngl = mesh.nop, mesh.ngl
@@ -132,7 +139,8 @@ def build_spec_operator_2d(mesh, cx, cy, _mutate=None):
             P, sP, C, sC, cn_cp = b, lo_side, a, hi_side, cn
         upper = (0.5 * (mesh.box[C][t0] + mesh.box[C][t1])
                  > 0.5 * (mesh.box[P][t0] + mesh.box[P][t1]))
-        parents.setdefault((P, sP), dict(cn_cp=cn_cp, t=(t0, t1), halves=[]))[
+        parents.setdefault((P, sP), dict(cn_cp=cn_cp, t=(t0, t1), halves=[],
+                                         periodic=c["periodic"]))[
             "halves"].append((C, sC, 0 if upper else 1))
 
     for (P, sP), pf in parents.items():
@@ -145,12 +153,14 @@ def build_spec_operator_2d(mesh, cx, cy, _mutate=None):
             al, ar = 0.5 * cn_cp, 0.5 * cn_cp
         else:
             al, ar = coeffs(cn_cp)
+        flip = (_mutate == "wrong_half"
+                or (_mutate == "wrong_half_wrap" and pf["periodic"]))
         t0, t1 = pf["t"]
         tp = mesh.trace(P, sP)
         jfp = (mesh.box[P][t1] - mesh.box[P][t0]) / 2.0
         fstar_p = np.zeros((ngl, n))          # rows: parent face node; cols: DOFs
         for C, sC, h in pf["halves"]:
-            hh = 1 - h if _mutate == "wrong_half" else h
+            hh = 1 - h if flip else h
             tc = mesh.trace(C, sC)
             jfc = (mesh.box[C][t1] - mesh.box[C][t0]) / 2.0
             fstar = np.zeros((ngl, n))
