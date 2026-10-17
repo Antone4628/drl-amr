@@ -4,7 +4,9 @@ identity read off a Jexpresso DG log on a natively periodic mesh (item 8d-i).
 The synthetic builds below are the 8d-i run's own lines (4x4 base: gap0 = 9,
 W0 = 8) at t = 2.0 (N1 = 2, N2 = 0) and t = 10.5 (N1 = 0, N2 = 5), then the
 same lines with one number moved, so the test pins what each failure looks
-like rather than only that a correct log passes.
+like rather than only that a correct log passes. The 8d-ii scripted leg's six
+builds (8x8 base: gap0 = 17, W0 = 16, a level-2 family on the wrap) pin the
+level-2 form of the identity and the centroid-based N1.
 """
 
 import pytest
@@ -14,13 +16,17 @@ from tools.jexpresso.wrap_identity_check import check_build, main, parse_builds
 GAP0, W0 = 9, 8   # 4x4 base: (5*5 - 16), (4 + 4)
 
 
-def _build(G, V, N, M, P, census, mort, n1, et, fc, per=0, tw=0, uw=0):
-    return dict(quads=34, GV=(G, V), NM=(N, M), P=(P, 2 * P), census=(census, census),
-                onecell=(per, tw, uw, mort), probe=(n1, mort - n1, et, fc))
+def _build(G, V, N, M, P, census, mort, n1, et, fc, per=0, tw=0, uw=0, n1c=None):
+    b = dict(quads=34, GV=(G, V), NM=(N, M), P=(P, 2 * P), census=(census, census),
+             onecell=(per, tw, uw, mort), probe=(n1, mort - n1, et, fc))
+    if n1c is not None:
+        b["centroid"] = (n1c,)
+    return b
 
 
-def _log(G, V, N, M, P, census, mort, n1, et, fc, per=0, census_hi=None):
+def _log(G, V, N, M, P, census, mort, n1, et, fc, per=0, census_hi=None, n1c=None):
     census_hi = census if census_hi is None else census_hi
+    tail = [] if n1c is None else [f" # PROBE8B5: wrap mortar parent faces by centroid jump = {n1c}"]
     return "\n".join([
         " # Done p4est_refine with 34 total quadrants",
         f" # Natively periodic model: true ({G} grid nodes, {V} topology vertices)",
@@ -32,7 +38,7 @@ def _log(G, V, N, M, P, census, mort, n1, et, fc, per=0, census_hi=None):
         f"0 untagged walls, {mort} mortar",
         f" # PROBE8B5: native_periodic=true  one-cell facets: periodic-tagged={n1}  "
         f"untagged={mort - n1}  length(edge_type)={et}  length(facet_cell_ids)={fc}",
-    ]) + "\n"
+    ] + tail) + "\n"
 
 
 T20 = (48, 39, 6, 53, 10, 136, 30, 2, 83, 83)      # 8d-i t = 2.0: N1 = 2, N2 = 0
@@ -103,6 +109,48 @@ def test_refuses_a_log_without_the_probe(tmp_path):
     log.write_text("\n".join(_log(*T20).splitlines()[:-1]) + "\n")
     with pytest.raises(SystemExit, match="PROBE8B5"):
         main([str(log), "--nex", "4", "--ney", "4"])
+
+
+# The 8d-ii scripted leg (2026-10-17, 8x8 native): preadapt, A1..A5.
+GAP0_8, W0_8 = 17, 16
+SCRIPTED = (
+    (90, 73, 16, 131, 6, 280, 18, 0, 149, 149, 0),
+    (95, 78, 15, 131, 10, 292, 30, 1, 161, 161, 1),
+    (113, 94, 17, 143, 18, 340, 54, 1, 197, 197, 1),
+    (113, 94, 17, 143, 18, 340, 54, 1, 197, 197, 1),
+    (112, 93, 17, 146, 16, 340, 48, 1, 194, 194, 1),
+    (108, 90, 15, 140, 16, 328, 48, 2, 188, 188, 2),
+)
+
+
+def test_scripted_leg_level_2_both_sources():
+    want_n2 = (0, 0, 2, 2, 2, 1)
+    for args, n2 in zip(SCRIPTED, want_n2, strict=True):
+        b = _build(*args[:10], n1c=args[10])
+        for src in ("tag", "centroid"):
+            ok, n2_gap, n2_pair, fails = check_build(b, GAP0_8, W0_8, src)
+            assert ok, (src, fails)
+            assert n2_gap == n2_pair == n2
+
+
+def test_centroid_source_is_independent_of_the_tag():
+    # a lost tag breaks the tag reading and leaves the centroid reading intact
+    b = _build(113, 94, 17, 143, 18, 340, 54, 0, 197, 197, n1c=1)
+    assert not check_build(b, GAP0_8, W0_8, "tag")[0]
+    assert check_build(b, GAP0_8, W0_8, "centroid")[0]
+    b = _build(*SCRIPTED[2][:10])
+    ok, *_, fails = check_build(b, GAP0_8, W0_8, "centroid")
+    assert not ok and fails == ["no centroid line"]
+
+
+def test_main_centroid_option(tmp_path, capsys):
+    log = tmp_path / "l2.log"
+    log.write_text("".join(_log(*a[:10], n1c=a[10]) for a in SCRIPTED))
+    assert main([str(log), "--nex", "8", "--ney", "8", "--n1-from", "centroid"]) == 0
+    assert "N1 from centroid; 6 builds" in capsys.readouterr().out
+    log.write_text(_log(*SCRIPTED[0][:10]))
+    with pytest.raises(SystemExit, match="centroid jump"):
+        main([str(log), "--nex", "8", "--ney", "8", "--n1-from", "centroid"])
 
 
 def test_base_gap_follows_the_grid():

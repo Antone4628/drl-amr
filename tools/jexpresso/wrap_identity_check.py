@@ -13,9 +13,17 @@ forest from three places:
            a wrap mortar's coarse facet keeps its periodic tag, the hanging
            halves carry none, so N1 = wrap mortar parent faces
 
-With N2 = base wrap edges refined on both sides (a midpoint vertex that
-exists on both sides is two grid nodes glued to one topology vertex; a
-midpoint only one side carries is one of each):
+    PROBE8B5: wrap mortar parent faces by centroid jump = N1
+        -- the same count read from geometry (probe8d patch): a mortar whose
+           child sits most of the domain away from its parent crosses the
+           wrap. Independent of tags; --n1-from centroid reads this line.
+
+With N2 = the refinement vertices on the wrap that exist on both sides
+(midpoints, quarter points, ...): each is two grid nodes glued to one
+topology vertex, and each adds one conforming face across the wrap; a
+vertex only one side carries (the hanging case) is one node and one vertex
+and adds nothing. At level 1, N2 is the number of base wrap edges refined
+on both sides (item 8d-i); at level 2 the quarter points join (item 8d-ii):
 
     G - V = gap0 + N2        gap0 = (nex+1)(ney+1) - nex*ney
     N     = W0 - N1 + N2     W0   = nex + ney  (base wrap faces)
@@ -37,8 +45,10 @@ Exit 0 when every build passes, 1 otherwise. Builds are delimited by the
 'Done p4est_refine' line each one starts with; a log from a run without
 JX_PROBE_8B5 has no N1 and is refused.
 
-Named regression: the 2026-10-17 8d-i log -- 41 builds, 0 violations, gap
-9 -> 11 -> 14 -> 13 -> 12 -> 11 -> 9, N2 up to 5.
+Named regressions: the 2026-10-17 8d-i log (4x4, --n1-from tag) -- 41
+builds, 0 violations, gap 9 -> 11 -> 14 -> 13 -> 12 -> 11 -> 9, N2 up to 5;
+the 2026-10-17 8d-ii scripted log (8x8, either source) -- 7 builds, gap
+17, 17, 17, 19, 19, 19, 18, N1 0, 0, 1, 1, 1, 1, 2.
 """
 
 import argparse
@@ -55,6 +65,7 @@ _PAT = {
                           r"(\d+) untagged walls, (\d+) mortar"),
     "probe": re.compile(r"one-cell facets: periodic-tagged=(\d+)\s+untagged=(\d+)\s+"
                         r"length\(edge_type\)=(\d+)\s+length\(facet_cell_ids\)=(\d+)"),
+    "centroid": re.compile(r"wrap mortar parent faces by centroid jump = (\d+)"),
 }
 
 
@@ -70,7 +81,7 @@ def parse_builds(lines):
             continue
         if cur is None:
             continue
-        for key in ("GV", "NM", "P", "census", "onecell", "probe"):
+        for key in ("GV", "NM", "P", "census", "onecell", "probe", "centroid"):
             m = _PAT[key].search(line)
             if m:
                 cur[key] = tuple(int(g) for g in m.groups())
@@ -79,17 +90,21 @@ def parse_builds(lines):
     return builds
 
 
-def check_build(b, gap0, w0):
-    """(ok, N2 from the gap, N2 from the pairer, list of failure names)."""
+def check_build(b, gap0, w0, n1_from="tag"):
+    """(ok, N2 from the gap, N2 from the pairer, list of failure names).
+    n1_from: "tag" reads N1 from the probe's periodic-tagged count,
+    "centroid" from its centroid-jump count (probe8d patch)."""
     fails = []
     for key in ("GV", "NM", "P", "census", "onecell", "probe"):
         if key not in b:
             fails.append(f"no {key} line")
+    if n1_from == "centroid" and "centroid" not in b:
+        fails.append("no centroid line")
     if fails:
         return False, None, None, fails
     G, V = b["GV"]
     N, _M = b["NM"]
-    n1 = b["probe"][0]
+    n1 = b["probe"][0] if n1_from == "tag" else b["centroid"][0]
     n2_gap = G - V - gap0
     n2_pair = N - w0 + n1
     if n2_gap != n2_pair:
@@ -113,6 +128,9 @@ def main(argv=None):
     ap.add_argument("log", help="a Jexpresso run log, or a grep digest that keeps the build lines")
     ap.add_argument("--nex", type=int, required=True, help="base-grid elements in x")
     ap.add_argument("--ney", type=int, required=True, help="base-grid elements in y")
+    ap.add_argument("--n1-from", choices=("tag", "centroid"), default="tag",
+                    help="N1 from the probe's periodic-tagged count (default) or from its "
+                         "centroid-jump count (probe8d patch)")
     args = ap.parse_args(argv)
 
     gap0 = (args.nex + 1) * (args.ney + 1) - args.nex * args.ney
@@ -125,18 +143,22 @@ def main(argv=None):
         raise SystemExit(f"{args.log}: no PROBE8B5 line -- the run needs JX_PROBE_8B5=1 "
                          f"(probe8b5 patch) for N1")
 
-    print(f"wrap identity: base {args.nex}x{args.ney}, gap0 = {gap0}, W0 = {w0}; "
-          f"{len(builds)} builds in {args.log}")
+    if args.n1_from == "centroid" and not any("centroid" in b for b in builds):
+        raise SystemExit(f"{args.log}: no 'centroid jump' line -- the run needs the probe8d "
+                         f"patch for --n1-from centroid")
+    print(f"wrap identity: base {args.nex}x{args.ney}, gap0 = {gap0}, W0 = {w0}, N1 from "
+          f"{args.n1_from}; {len(builds)} builds in {args.log}")
     print(f"{'build':>5s} {'quads':>5s} {'G/V':>7s} {'gap':>3s} {'N/M':>7s} {'N1':>2s} "
           f"{'N2':>5s} {'P':>2s} {'census':>9s}")
     nbad = 0
     for i, b in enumerate(builds, 1):
-        ok, n2g, n2p, fails = check_build(b, gap0, w0)
+        ok, n2g, n2p, fails = check_build(b, gap0, w0, args.n1_from)
         nbad += 0 if ok else 1
         gv = f"{b['GV'][0]}/{b['GV'][1]}" if "GV" in b else "-"
         gap = f"{b['GV'][0] - b['GV'][1]}" if "GV" in b else "-"
         nm = f"{b['NM'][0]}/{b['NM'][1]}" if "NM" in b else "-"
-        n1 = f"{b['probe'][0]}" if "probe" in b else "-"
+        n1 = (f"{b['probe'][0]}" if "probe" in b else "-") if args.n1_from == "tag" else \
+             (f"{b['centroid'][0]}" if "centroid" in b else "-")
         n2 = f"{n2g}|{n2p}" if n2g is not None else "-"
         p = f"{b['P'][0]}" if "P" in b else "-"
         cen = f"{b['census'][0]}/{b['census'][1]}" if "census" in b else "-"
