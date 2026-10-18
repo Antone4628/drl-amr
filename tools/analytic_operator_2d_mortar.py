@@ -33,6 +33,12 @@ tangential coordinates are shared by both sides, so parent/child and the
 halves are decided from them exactly as for an interior face (D-079, item
 8b: a 2:1 face across the wrap is a mortar).
 
+Walls (item 8e): a side the mesh lists in `mesh.walls` (a Mesh2 built with
+wall axes) gets the mirror-ghost wall term of analytic_operator_2d.py,
++ w_k Jf (c.n - |c.n|) u on the diagonal with n the side's outward normal --
+zero on an outflow wall, twice the upwind penalty on an inflow wall. A child
+wall side is just another wall side with its own (half) face Jacobian.
+
 Uses: check [10] of tools/gate_2d_mortar.py (informational entrywise
 comparison), and the fixture of tests/dg_2d/test_gate_2d_mortar.py.
 
@@ -80,6 +86,19 @@ def geometric_mass(mesh):
         for b in mesh.box])
 
 
+def wall_side_data(mesh, e, side, cx, cy):
+    """(trace DOFs, face Jacobian, c . n_outward) for a wall side of element e.
+    side: 0 x-min, 1 x-max, 2 y-min, 3 y-max."""
+    xa, xb, ya, yb = mesh.box[e]
+    if side in (0, 1):
+        jf = (yb - ya) / 2.0
+        cn = -cx if side == 0 else cx
+    else:
+        jf = (xb - xa) / 2.0
+        cn = -cy if side == 2 else cy
+    return mesh.trace(e, side), jf, cn
+
+
 def build_spec_operator_2d(mesh, cx, cy, _mutate=None):
     """Assemble the operator on a gate_2d_mortar.Mesh2 (element boxes and
     contacts derived from a node dump), in that mesh's element and DOF order.
@@ -89,7 +108,10 @@ def build_spec_operator_2d(mesh, cx, cy, _mutate=None):
     face), "wrong_half_wrap" (the same, on the parent faces across the
     periodic wrap only -- interior mortars stay correct), "double_half"
     (project without its 1/2), "uncoupled" (mortar faces skipped), "central"
-    (lambda = 0 in the mortar flux only)."""
+    (lambda = 0 in the mortar flux only), "transmissive_wall" (no wall term
+    at all: the ghost equals the interior trace), "standard_inflow" (the
+    exterior state is q_bc = 0 itself instead of the mirror -q-: half the
+    inflow penalty, the textbook scalar Dirichlet imposition)."""
     nop, ngl = mesh.nop, mesh.ngl
     _, wgl, D = lgl_and_diff(nop)
     interp, project = projection_1d(nop)
@@ -178,4 +200,13 @@ def build_spec_operator_2d(mesh, cx, cy, _mutate=None):
             r = tp[k]
             L[r, r] -= wgl[k] * jfp * cn_cp / M[r]
             L[r] += wgl[k] * jfp * fstar_p[k] / M[r]
+
+    # ---- walls: the mirror-ghost term, + w Jf (cn - |cn|) u, n outward ----
+    if _mutate != "transmissive_wall":
+        factor = 0.5 if _mutate == "standard_inflow" else 1.0
+        for e, side in getattr(mesh, "walls", []):
+            tw, jf, cn = wall_side_data(mesh, e, side, cx, cy)
+            for k in range(ngl):
+                r = tw[k]
+                L[r, r] += factor * wgl[k] * jf * (cn - abs(cn)) / M[r]
     return L

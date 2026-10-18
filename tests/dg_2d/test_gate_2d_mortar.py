@@ -36,6 +36,14 @@ What each group pins:
      detection matrix on a wrap mesh, which differs from the interior one in
      exactly one row (WRAP_DETECTION: a central wrap flux is seen by
      exactness too, through the upwind side's outflow face).
+  7. Walls (item 8e): the analytic and spec builders agree on the mirror-ghost
+     wall term; the inflow-wall penalty has its hand value; the walled and
+     channel meshes (conforming, the inflow corner, the outflow corner, the
+     inflow wall x wrap corner) pass with no kernel mode and the measured
+     spectral radii; the two wall defects (a transmissive wall; the textbook
+     exterior state in place of the mirror) are caught, the mortar matrix
+     carries over with its measured differences, and a wrong --walls
+     declaration cannot produce a PASS in either direction.
 
 The spec-built operator takes face contacts from the instrument's own Mesh2
 topology; group 2 pins that topology against hand-counted values, which is
@@ -454,3 +462,186 @@ def test_wrap_mesh_detection_matrix():
                         assert safe_max < EXACT_TOL and wrap_max > 1e-3, (name, cx, cy)
                     else:
                         assert safe_max > 1e-3, (name, cx, cy)
+
+# ---------------------------------------------------------------------------
+# 7. walls (item 8e): a walled axis is not a wrap
+# ---------------------------------------------------------------------------
+
+# The walled meshes of the 8e operator gate. (walls, refined base cell or None,
+# expected wall sides, mortar halves, mortar halves across the wrap). The
+# bottom-left corner has two inflow walls on the walled mesh and an inflow wall
+# meeting the x-wrap on the channel; the top-right corner has two outflow walls.
+WALL_MESHES = {
+    "walled_conf": ("xy", None, 16, 0, 0),
+    "channel_conf": ("y", None, 8, 0, 0),
+    "walled_corner_ll": ("xy", (0, 0), 18, 4, 0),
+    "walled_corner_ur": ("xy", (3, 3), 18, 4, 0),
+    "channel_corner_ll": ("y", (0, 0), 9, 6, 2),
+}
+
+
+def _wall_boxes(cell):
+    return boxes_conforming() if cell is None else boxes_2to1(refined=cell)
+
+
+def _wall_mesh(name):
+    walls, cell, *_ = WALL_MESHES[name]
+    x, y = nodes_from_boxes(_wall_boxes(cell))
+    return Mesh2(x, y, GATE_NOP, GATE_DOMAIN, GATE_NEX, GATE_NEY, walls=walls), x, y
+
+
+def _wall_gate(name, cx, cy, mutate=None, **kw):
+    walls, cell, n_wall, n_mortar, n_wrap = WALL_MESHES[name]
+    mesh, x, y = _wall_mesh(name)
+    L = build_spec_operator_2d(mesh, cx, cy, _mutate=mutate)
+    args = dict(walls=walls, expect_wall_sides=n_wall, expect_mortar_halves=n_mortar,
+                expect_wrap_mortar_halves=n_wrap)
+    args.update(kw)
+    return gate(L, x, y, M=geometric_mass(mesh), cx=cx, cy=cy, **args)
+
+
+def test_walled_analytic_equals_spec_on_conforming_meshes():
+    """The two builders agree on the wall term (mirror ghost about q_bc = 0):
+    the analytic operator with walls, and the spec operator on a Mesh2 that
+    lists the wall sides, differ at round-off, both legs, both wall sets."""
+    for name in ("walled_conf", "channel_conf"):
+        walls = WALL_MESHES[name][0]
+        mesh, _, _ = _wall_mesh(name)
+        for cx, cy in LEGS:
+            S = build_spec_operator_2d(mesh, cx, cy)
+            A = build_analytic_operator_2d(GATE_NOP, GATE_NEX, GATE_NEY, cx, cy, walls=walls)
+            assert np.max(np.abs(S - A)) < 1e-12, (name, cx, cy)
+
+
+def test_wall_penalty_hand_value():
+    """P on an inflow-wall node is 2 |c.n| / (w_0 J_perp): on the 4x4 walled
+    mesh at leg 1 the bottom wall gives 2*1/(0.1*2.5) = 8, the left wall
+    2*0.5/(0.1*1.25) = 8, and the bottom-left corner node 16; outflow walls
+    (top, right) add nothing. The drain b is w_k Jf |c.n| on every wall node."""
+    from tools.gate_2d_mortar import wall_terms
+    mesh, _, _ = _wall_mesh("walled_conf")
+    P, b, n_in = wall_terms(mesh, GATE_CX, GATE_CY)
+    assert n_in == 8
+    assert np.isclose(np.max(np.abs(P)), 16.0)
+    corner = mesh.dof(0, 0, 0)                 # element (0,0), node (i=1, j=1)
+    assert np.isclose(P[corner], -16.0)
+    bottom_mid = mesh.dof(1, 2, 0)             # bottom wall, interior face node
+    assert np.isclose(P[bottom_mid], -8.0)
+    top_right = mesh.dof(15, NGL - 1, NGL - 1)   # two outflow walls: no penalty, drains
+    assert P[top_right] == 0.0 and b[top_right] > 0.0
+    assert np.count_nonzero(b) == 16 * NGL - 4   # every wall node once (corners shared)
+
+
+def test_wall_topology_counts():
+    for name, (walls, cell, n_wall, n_mortar, n_wrap) in WALL_MESHES.items():
+        mesh, _, _ = _wall_mesh(name)
+        kinds = [(c["kind"], c["periodic"]) for c in mesh.contacts]
+        assert len(mesh.walls) == n_wall, name
+        assert kinds.count(("mortar", False)) + kinds.count(("mortar", True)) == n_mortar, name
+        assert kinds.count(("mortar", True)) == n_wrap, name
+        if walls == "xy":
+            assert kinds.count(("conforming", True)) == 0, name
+        n_conf_int = 24 if cell is None else 26
+        assert kinds.count(("conforming", False)) == n_conf_int, name
+    mesh, _, _ = _wall_mesh("channel_conf")
+    assert [(c["kind"], c["periodic"]) for c in mesh.contacts].count(("conforming", True)) == 4
+    mesh, _, _ = _wall_mesh("channel_corner_ll")
+    assert [(c["kind"], c["periodic"]) for c in mesh.contacts].count(("conforming", True)) == 3
+
+
+# Spectral radii of the spec-built walled operators (measured 2026-10-18): the
+# inflow-wall penalty sets rho, so the walled conforming mesh and the outflow
+# corner preadapt share it, and refining the inflow corner doubles it (the
+# children's J_perp is half). The 8e gate pre-declares these for Jexpresso.
+WALL_RHO = {
+    "walled_conf": (11.4454, 9.7286),
+    "channel_conf": (8.6686, 5.8411),
+    "walled_corner_ll": (22.8907, 19.4571),
+    "walled_corner_ur": (11.4454, 9.7286),
+    "channel_corner_ll": (13.5769, 8.0166),
+}
+
+
+def test_walled_spec_operators_pass_both_legs():
+    for name, rhos in WALL_RHO.items():
+        for (cx, cy), rho in zip(LEGS, rhos):
+            failures, rep = _wall_gate(name, cx, cy)
+            assert failures == [], (name, cx, cy, failures)
+            s = rep["structural"]
+            assert s["n_zero_modes"] == 0, name           # the constant is not in the kernel
+            assert s["max_re_lambda"] < 0.0, name
+            assert abs(s["spectral_radius"] - rho) < 5e-4, (name, cx, cy, s["spectral_radius"])
+            assert rep["conservation"] < 1e-13 and rep["consistency"] < 1e-13, name
+            assert rep["spec"]["max_diff"] == 0.0
+            assert rep["n_wall_sides"] == WALL_MESHES[name][2]
+
+
+# The measured detection matrices on the walled meshes (2026-10-18, both legs
+# identical). The two wall defects: a transmissive wall (no term at all) is
+# seen by everything but support; the textbook exterior state q_bc = 0 in
+# place of the mirror (half the inflow penalty) is seen by the mass identity,
+# consistency, exactness and the far rows -- so the gate certifies the
+# operator as the mirror construction builds it, not merely "some" wall
+# condition. The mortar rows carry over from DETECTION with one measured
+# difference: an uncoupled mortar whose downwind neighbours have inflow walls
+# of their own is damped by their penalty, so the spectrum stays in the left
+# half-plane (walled_corner_ll), while at the outflow corner it does not
+# (walled_corner_ur, as on the periodic mesh); and across the wrap a central
+# flux is seen by exactness too (channel_corner_ll, as WRAP_DETECTION).
+WALL_ONLY_DETECTION = {
+    "transmissive_wall": {"conservation", "consistency", "exactness", "far_rows", "spectrum"},
+    "standard_inflow": {"conservation", "consistency", "exactness", "far_rows"},
+}
+WALL_DETECTION = {
+    "walled_corner_ll": dict(WALL_ONLY_DETECTION, **{
+        "wrong_half": {"exactness"},
+        "double_half": {"conservation", "consistency", "exactness"},
+        "uncoupled": {"conservation", "support"},
+        "central": {"support"},
+    }),
+    "walled_corner_ur": dict(WALL_ONLY_DETECTION, **{
+        "wrong_half": {"exactness"},
+        "double_half": {"conservation", "consistency", "exactness"},
+        "uncoupled": {"conservation", "support", "spectrum"},
+        "central": {"support"},
+    }),
+    "channel_corner_ll": dict(WALL_ONLY_DETECTION, **{
+        "wrong_half": {"exactness"},
+        "double_half": {"conservation", "consistency", "exactness"},
+        "uncoupled": {"conservation", "support"},
+        "central": {"support", "exactness"},
+    }),
+}
+
+
+def test_wall_detection_matrices_both_legs():
+    for name in ("walled_conf", "channel_conf"):
+        for cx, cy in LEGS:
+            for mutate, expected in WALL_ONLY_DETECTION.items():
+                failures, _ = _wall_gate(name, cx, cy, mutate=mutate)
+                assert set(failures) == expected, (name, cx, cy, mutate, failures)
+    for name, matrix in WALL_DETECTION.items():
+        for cx, cy in LEGS:
+            for mutate, expected in matrix.items():
+                failures, _ = _wall_gate(name, cx, cy, mutate=mutate)
+                assert set(failures) == expected, (name, cx, cy, mutate, failures)
+
+
+def test_walled_operator_judged_as_periodic_fails():
+    """Declaring no walls on a walled operator: the boxes still tile the
+    periodic domain, so geometry passes and every structural check fails --
+    a mis-declared --walls cannot produce a PASS."""
+    for name in ("walled_conf", "channel_corner_ll"):
+        failures, _ = _wall_gate(name, GATE_CX, GATE_CY, walls=(), expect_wall_sides=None,
+                                 expect_wrap_mortar_halves=None, expect_mortar_halves=None)
+        assert {"conservation", "consistency", "exactness", "far_rows", "spectrum"} <= set(failures), (name, failures)
+
+
+def test_periodic_operator_judged_as_walled_fails():
+    """The converse: the periodic analytic operator carries wrap coupling and
+    no wall term, so under --walls xy it fails support (coupling across a
+    declared wall) and the wall checks."""
+    x, y = nodes_from_boxes(boxes_conforming())
+    A = build_analytic_operator_2d(GATE_NOP, GATE_NEX, GATE_NEY, GATE_CX, GATE_CY)
+    failures, _ = gate(A, x, y, walls="xy", expect_wall_sides=16)
+    assert "support" in failures and "conservation" in failures and "consistency" in failures

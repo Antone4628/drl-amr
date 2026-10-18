@@ -6,9 +6,11 @@ Constructs the exact semi-discrete operator L (du/dt = L u) for
     du/dt + cx du/dx + cy du/dy = 0
 
 discretized by collocated (DGSEM / lumped-mass) nodal DG with an upwind
-numerical flux on a uniform, doubly periodic, tensor-product quad mesh.
+numerical flux on a uniform tensor-product quad mesh, doubly periodic by
+default; from Phase-6 item 8e (2026-10) either axis can be WALLED instead.
 The extracted Jexpresso 2D operator is compared entrywise against this
-construction by tools/gate_2d_compare.py.
+construction by tools/gate_2d_compare.py (periodic) and, through its far
+rows, by tools/gate_2d_mortar.py (periodic or walled).
 
 Construction (strong form, per element, local nodes (i, j), i along x):
 
@@ -27,6 +29,27 @@ Construction (strong form, per element, local nodes (i, j), i along x):
             with Fn = (c . n) u, the upwind flux in Rusanov form
             Fn* = 0.5 (Fn_L + Fn_R) - 0.5 |c . n| (u_R - u_L),
             and everything divided by the lumped mass M_{ij} = w_i w_j Jvol.
+
+  walls:    a wall side has no R element. Jexpresso's DG boundary loop
+            (surface_rhs_el!, dg_boundary_ghost!) builds the R trace as the
+            MIRROR of the interior trace about the case's Dirichlet value,
+            q+ = 2 q_bc - q-, and the scalar advection cases prescribe
+            q_bc = 0 on every wall, so q+ = -q-. With lambda = |c . n| the
+            upwind flux reduces to Fn* = |c . n| q- on both kinds of wall
+            (outflow, c . n > 0: Fn* = (c . n) q-, the ghost drops out;
+            inflow, c . n < 0: Fn* = (c . n) q+ = |c . n| q-, the interior
+            drops out), and the L-side correction is
+
+                rhs_el += + w_k * J_face * (c . n - |c . n|) u
+
+            with n the OUTWARD normal of the wall side: zero on an outflow
+            wall, 2 (c . n) u on an inflow wall -- twice the standard upwind
+            penalty, which is what the mirror construction gives a scalar.
+            The reference assumes q_bc = 0; a nonzero q_bc adds a source,
+            not an operator entry. The constant is then no longer in the
+            kernel (L 1 != 0 on inflow-wall rows): the walled operator has
+            NO zero mode, and every wall node drains mass at
+            w_k J_face |c . n| u (both kinds of wall).
 
   This is the Sec. 5.15(f)/(g) convention: the surface term carries the face
   quadrature weight and face Jacobian (omit the volume mass, keep the face
@@ -51,7 +74,7 @@ backends.python_1d.dg.basis, which is shared with the Python solver -- but
 the basis itself was verified against the fully independent Julia-side
 analytic construction in F1 (2026-07-27), and every defect class this gate
 guards (assembly, flux correction, face weighting, periodic pairing, mass
-lumping) lives above the basis level.
+lumping, wall terms) lives above the basis level.
 
 Self-checks: `python -m tools.analytic_operator_2d` prints the structural
 report for the gate configuration. The pytest suite
@@ -70,6 +93,28 @@ GATE_NEY = 4
 GATE_NOP = 4
 GATE_CX = 0.5   # advection_velocity() in problems/AdvDiff/advection2d_dg
 GATE_CY = 1.0
+
+
+def wall_axes(walls):
+    """Normalize a wall specification to a frozenset of axes {0 (x), 1 (y)}.
+    Accepts "", "none", "x", "y", "xy", an iterable of "x"/"y" or 0/1, or a
+    frozenset already. The x axis walled means the x-min and x-max domain
+    boundaries are walls (no wrap in x)."""
+    if walls is None:
+        return frozenset()
+    if isinstance(walls, str):
+        if walls.lower() in ("", "none"):
+            return frozenset()
+        walls = list(walls.lower())
+    out = set()
+    for w in walls:
+        if w in ("x", 0):
+            out.add(0)
+        elif w in ("y", 1):
+            out.add(1)
+        else:
+            raise ValueError(f"unknown wall axis {w!r}; use x, y, or xy")
+    return frozenset(out)
 
 
 def lgl_and_diff(nop):
@@ -115,19 +160,23 @@ def lumped_mass_vector_2d(nop, nex, ney, domain=GATE_DOMAIN):
 
 
 def build_analytic_operator_2d(nop, nex, ney, cx, cy,
-                               domain=GATE_DOMAIN, elem_cells=None):
+                               domain=GATE_DOMAIN, elem_cells=None, walls=()):
     """Assemble the analytic operator. See the module docstring for the scheme.
 
     Parameters
     ----------
     nop : polynomial order (ngl = nop + 1 LGL nodes per direction)
-    nex, ney : elements per direction (uniform, doubly periodic)
+    nex, ney : elements per direction (uniform)
     cx, cy : advection velocity (either sign; upwinding via the Rusanov-form
         flux with lambda = |c . n|, which is exact upwind for linear advection)
     domain : ((xmin, xmax), (ymin, ymax))
     elem_cells : element index -> (ex, ey) grid cell, len nex*ney; defaults to
         the canonical ordering. Pass Jexpresso's ordering (derived from the
         probe's coordinate dump) to assemble directly in its DOF order.
+    walls : which axes are walled instead of periodic -- "x", "y", "xy", or
+        an iterable (see wall_axes). Default: none (doubly periodic). On a
+        walled axis the wrap face is dropped and both domain boundaries get
+        the mirror-ghost wall term of the module docstring.
 
     Returns the dense (n, n) operator, n = nex*ney*ngl^2.
 
@@ -138,6 +187,7 @@ def build_analytic_operator_2d(nop, nex, ney, cx, cy,
     """
     ngl = nop + 1
     xgl, wgl, D = lgl_and_diff(nop)
+    axes = wall_axes(walls)
     (xmin, xmax), (ymin, ymax) = domain
     dx = (xmax - xmin) / nex
     dy = (ymax - ymin) / ney
@@ -177,12 +227,15 @@ def build_analytic_operator_2d(nop, nex, ney, cx, cy,
     # flux; cn = c . n for the face family's L->R normal.
     #
     # x-normal faces: L = cell (ex, ey), R = cell ((ex+1) % nex, ey), n = (+1, 0).
+    # On a walled x axis the face ex = nex-1 -> 0 (the wrap) does not exist.
     cn = cx
     lam = abs(cx)
     a_l = 0.5 * cn + 0.5 * lam
     a_r = 0.5 * cn - 0.5 * lam
     for ey in range(ney):
         for ex in range(nex):
+            if 0 in axes and ex == nex - 1:
+                continue
             e_l = cell_to_elem[(ex, ey)]
             e_r = cell_to_elem[((ex + 1) % nex, ey)]
             for k in range(ngl):                    # face node, along y
@@ -204,6 +257,8 @@ def build_analytic_operator_2d(nop, nex, ney, cx, cy,
     a_r = 0.5 * cn - 0.5 * lam
     for ey in range(ney):
         for ex in range(nex):
+            if 1 in axes and ey == ney - 1:
+                continue
             e_l = cell_to_elem[(ex, ey)]
             e_r = cell_to_elem[(ex, (ey + 1) % ney)]
             for k in range(ngl):                    # face node, along x
@@ -215,6 +270,25 @@ def build_analytic_operator_2d(nop, nex, ney, cx, cy,
                 L[r_l, r_r] += +s_l * (-a_r)
                 L[r_r, r_r] += -s_r * (cn - a_r)
                 L[r_r, r_l] += -s_r * (-a_l)
+
+    # ---- wall terms (mirror ghost about q_bc = 0; see the module docstring)
+    # Each wall side: + w_k Jf (c.n - |c.n|) u on the diagonal, n outward.
+    if 0 in axes:
+        for ey in range(ney):
+            for ex, i_side, cn in ((0, 0, -cx), (nex - 1, ngl - 1, cx)):
+                e = cell_to_elem[(ex, ey)]
+                for k in range(ngl):
+                    r = dof(e, i_side, k)
+                    s = (wgl[k] * jface_x) / (wgl[i_side] * wgl[k] * jvol)
+                    L[r, r] += s * (cn - abs(cn))
+    if 1 in axes:
+        for ex in range(nex):
+            for ey, j_side, cn in ((0, 0, -cy), (ney - 1, ngl - 1, cy)):
+                e = cell_to_elem[(ex, ey)]
+                for k in range(ngl):
+                    r = dof(e, k, j_side)
+                    s = (wgl[k] * jface_y) / (wgl[k] * wgl[j_side] * jvol)
+                    L[r, r] += s * (cn - abs(cn))
 
     return L
 
@@ -235,7 +309,9 @@ def structural_report(L, m):
     the TRUE kernel (the constant) sits at machine zero (~1e-15). The gate
     configuration makes the cancellation exact because cx/dx = cy/dy makes
     the two 1D sub-operators the same matrix. Hence:
-      n_zero_modes      |lambda| < 1e-10*rho  -- the genuine kernel (expect 1)
+      n_zero_modes      |lambda| < 1e-10*rho  -- the genuine kernel (expect 1
+                                                 on a periodic mesh, 0 on a
+                                                 mesh with an inflow wall)
       n_near_zero_modes |lambda| < 1e-6*rho   -- kernel + conjugate-cancelled
                                                  physical pairs (informational)
     """
