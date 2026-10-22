@@ -107,6 +107,16 @@ GROUND = "#FAF9F5"
 INK, INK2, HAIR = "#1F1E1B", "#5E5B54", "#B9B4A8"
 KIND_COLOR = {CONFORMING: INK, MORTAR_PARENT: "#1F5A96", MORTAR_CHILD: "#B8501A",
               WRAP: "#1E7A4E", WALL: "#8B1E2B"}
+PARENT_LIGHT = "#6FA8DC"    # mortar parent under white ink: #1F5A96 sinks into the viridis floor
+
+
+def kind_color(k, ink):
+    """The drawn colour of a side of kind k when the conforming sides are drawn in ink."""
+    if k == CONFORMING:
+        return ink
+    if k == MORTAR_PARENT and ink == "white":
+        return PARENT_LIGHT
+    return KIND_COLOR[k]
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +336,8 @@ def census_line(n, t, c):
 # matplotlib render
 # ---------------------------------------------------------------------------
 
-def render_frame(ax, mesh, cls, x=None, y=None, q=None, inset=0.05, lw=0.8,
-                 vmin=0.0, vmax=1.0, cmap="viridis", title=None):
+def render_frame(ax, mesh, cls, x=None, y=None, q=None, inset=0.05, lw=0.3,
+                 ink="white", vmin=0.0, vmax=1.0, cmap="viridis", title=None):
     """Draw one frame on ax: the field (when given) as each element's 5x5
     nodal values on its 16 bilinear sub-cells, then every side as a line
     coloured by kind, width growing with level, mortar child sides inset."""
@@ -348,7 +358,7 @@ def render_frame(ax, mesh, cls, x=None, y=None, q=None, inset=0.05, lw=0.8,
                 if cls["kind"][e, s] != k:
                     continue
                 segs.append(side_segment(mesh, e, s, inset if k == MORTAR_CHILD else 0.0))
-                colors.append(KIND_COLOR[k])
+                colors.append(kind_color(k, ink))
                 widths.append(lw * (1.0 + 0.4 * cls["level"][e]) * (1.4 if k != CONFORMING else 1.0))
     ax.add_collection(LineCollection(segs, colors=colors, linewidths=widths, zorder=5))
     pad = 0.01 * max(mesh.Lx, mesh.Ly)     # the boundary sides are drawn on the edge
@@ -374,9 +384,10 @@ def _figure(mesh):
     return fig, ax
 
 
-def _legend(ax, present):
+def _legend(ax, present, ink="white"):
     from matplotlib.lines import Line2D
-    handles = [Line2D([0], [0], color=KIND_COLOR[k], lw=1.6, label=KIND_NAMES[k])
+    handles = [Line2D([0], [0], color=(INK if k == CONFORMING else kind_color(k, ink)),
+                      lw=1.6, label=KIND_NAMES[k])
                for k in sorted(present)]
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False,
               fontsize=7, labelcolor=INK2, handlelength=1.6)
@@ -390,7 +401,7 @@ def frame_title(t, c):
 def render_still(path, mesh, cls, t, x=None, y=None, q=None, **kw):
     fig, ax = _figure(mesh)
     render_frame(ax, mesh, cls, x, y, q, title=frame_title(t, cls["census"]), **kw)
-    _legend(ax, set(np.unique(cls["kind"]).tolist()))
+    _legend(ax, set(np.unique(cls["kind"]).tolist()), kw.get("ink", "white"))
     fig.savefig(path, dpi=200, bbox_inches="tight", facecolor=GROUND)
     import matplotlib.pyplot as plt
     plt.close(fig)
@@ -415,7 +426,7 @@ def render_mp4(path, frames, meshes, classes, fps=8, **kw):
             ax.clear()
             ax.set_facecolor(GROUND)
             render_frame(ax, mesh, cls, x, y, q, title=frame_title(t, cls["census"]), **kw)
-            _legend(ax, present)
+            _legend(ax, present, kw.get("ink", "white"))
             writer.grab_frame(facecolor=GROUND)
     plt.close(fig)
 
@@ -459,6 +470,12 @@ def main(argv=None):
     ap.add_argument("--inset", type=float, default=0.05,
                     help="mortar child sides are drawn this fraction of the child's size "
                          "inside the element (0: on the face)")
+    ap.add_argument("--lw", type=float, default=0.3,
+                    help="base line width in points for a level-0 conforming side "
+                         "(each level adds 40%%; non-conforming kinds 1.4x)")
+    ap.add_argument("--ink", default="white", choices=("dark", "white"),
+                    help="colour of the conforming sides: white (the default, for lines "
+                         "over the field) or the plate's dark ink")
     ap.add_argument("--vmin", type=float, default=0.0)
     ap.add_argument("--vmax", type=float, default=1.0)
     ap.add_argument("--cmap", default="viridis")
@@ -511,7 +528,8 @@ def main(argv=None):
     with open(os.path.join(args.out, "census.txt"), "w") as f:
         f.write("\n".join(table) + "\n")
 
-    kw = dict(inset=args.inset, vmin=args.vmin, vmax=args.vmax, cmap=args.cmap)
+    kw = dict(inset=args.inset, lw=args.lw, ink=("white" if args.ink == "white" else INK),
+              vmin=args.vmin, vmax=args.vmax, cmap=args.cmap)
     for ts in args.still:
         k = int(np.argmin([abs(fr[1] - ts) for fr in frames]))
         n, t, x, y, q = frames[k]
