@@ -27,17 +27,25 @@ without it:
      dropped as redundant with the mass check.
   7. --no-l2-gate: L2 not decreasing fails the verdict by default and does not
      with the flag; mass still gates
+  8. walls (item 8e): on a walled axis the exact solution has no image and no
+     wrap, and nothing changes on a periodic one; the exact remaining-mass
+     fraction has its closed-form values (1 at t = 0, exactly 1/2 in x when
+     the centre sits on the right wall, ~0 once the pulse has left); a walled
+     run whose frames carry the exact field drained exactly reads L2 = 0 and
+     mass err at round-off; mass is reported and not gated with --walls.
 
 Run with: pytest tests/dg_2d/test_bracket_2d.py -v
 """
 
+import math
 import os
 
 import numpy as np
 import pytest
 
 from backends.python_1d.dg.basis import Lagrange_basis, lgl_gen
-from tools.bracket_2d import gaussian_exact, load_frames, main, read_vtu, score_run
+from tools.bracket_2d import (gaussian_exact, load_frames, main, read_vtu,
+                              remaining_mass_fraction, score_run)
 
 
 # The static 2:1 gate mesh (4x4 on [-5,5]x[0,20], cell (2,2) refined), copied
@@ -290,3 +298,70 @@ def test_no_l2_gate(tmp_path):
     assert main(ab) == 1                                   # L2 not decreasing: gated
     assert main(ab + ["--no-l2-gate"]) == 0                # reported, not gated
     assert main(ac + ["--no-l2-gate"]) == 1                # mass still gates
+
+
+# ---------------------------------------------------------------------------
+# 8. walls (item 8e)
+# ---------------------------------------------------------------------------
+
+def test_walled_exact_has_no_image_and_no_wrap():
+    rng = np.random.default_rng(5)
+    x = rng.uniform(-5, 5, 200)
+    y = rng.uniform(0, 20, 200)
+    # fully walled: the free-space translate, centre (0 + 0.5 t, 8 + t)
+    t = 12.0
+    free = np.exp(-(x - 6.0) ** 2) * np.exp(-(y - 20.0) ** 2)
+    assert np.max(np.abs(gaussian_exact(x, y, t, walls="xy") - free)) < 1e-15
+    # the channel: walls in y only -- image sum in x, free space in y
+    gx = sum(np.exp(-(x - (-4.0) - k * 10.0) ** 2) for k in (-1, 0, 1))   # centre x = 6 -> -4
+    chan = gx * np.exp(-(y - 20.0) ** 2)
+    assert np.max(np.abs(gaussian_exact(x, y, t, walls="y") - chan)) < 1e-15
+    # no walls: unchanged
+    assert np.array_equal(gaussian_exact(x, y, 4.0, walls=()), gaussian_exact(x, y, 4.0))
+
+
+def test_remaining_mass_fraction_closed_form():
+    assert remaining_mass_fraction(0.0) == 1.0                         # periodic: always 1
+    assert remaining_mass_fraction(14.0) == 1.0
+    f0 = remaining_mass_fraction(0.0, walls="xy")
+    assert abs(f0 - 1.0) < 1e-10                                       # pulse well inside
+    # centre on the right wall at t = 10 (x_c = 5): exactly half in x; y_c = 18
+    fx = 0.5 * (math.erf(0.0) + math.erf(10.0))
+    fy = 0.5 * (math.erf(2.0) + math.erf(18.0))
+    assert abs(remaining_mass_fraction(10.0, walls="xy") - fx * fy) < 1e-15
+    assert abs(remaining_mass_fraction(10.0, walls="x") - fx) < 1e-15
+    assert abs(remaining_mass_fraction(10.0, walls="y") - fy) < 1e-15
+    assert remaining_mass_fraction(14.0, walls="xy") < 1e-5             # the pulse has left
+    # monotone decreasing once the pulse reaches a wall
+    ts = np.linspace(6.0, 14.0, 17)
+    fr = [remaining_mass_fraction(t, walls="xy") for t in ts]
+    assert all(b <= a for a, b in zip(fr, fr[1:], strict=False))
+
+
+def test_walled_run_with_exact_frames_reads_zero(tmp_path):
+    """Frames carrying the exact walled solution: L2 = 0 at the end, and the
+    discrete mass follows the exact remaining fraction to quadrature accuracy
+    (the drained Gaussian integrated by LGL on the 2:1 mesh -- not round-off
+    when the pulse straddles a wall, so the bound is loose by design)."""
+    x, y = nodes_from_boxes(boxes_2to1())
+    frames = [(t, x, y, gaussian_exact(x, y, t, walls="xy")) for t in (0.0, 4.0, 10.0, 14.0)]
+    write_run(str(tmp_path), frames)
+    r = score_run(str(tmp_path), walls="xy")
+    assert r["walled"] and r["l2"] == 0.0 and r["nframes"] == 4
+    assert r["frames"][0]["frac_exact"] > 0.9999
+    assert abs(r["frac_final_exact"]) < 1e-5
+    assert r["mass_err"] < 1e-2
+    assert r["frames"][-1]["mass"] / r["mass0"] < 1e-3
+
+
+def test_walls_mass_not_gated_and_wrap_contact_refused(tmp_path):
+    x, y = nodes_from_boxes(boxes_2to1())
+    q0 = gaussian_exact(x, y, 0.0, walls="xy")
+    write_run(str(tmp_path / "a"), [(0.0, x, y, q0), (4.0, x, y, 0.5 * q0)])   # mass halves
+    a = ["--run", f"a={tmp_path / 'a'}"]
+    assert main(a + ["--no-l2-gate"]) == 1                 # periodic: drift gates
+    assert main(a + ["--no-l2-gate", "--walls", "xy"]) == 0   # walled: reported only
+    # Mesh2 with walls declared on a periodic frame set still tiles (the boxes
+    # are the same); what changes is the exact solution and the mass column
+    r = score_run(str(tmp_path / "a"), walls="xy")
+    assert r["mass_drift"] > 0.4 and r["mass_err"] > 0.4

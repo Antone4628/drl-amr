@@ -38,6 +38,19 @@ Two modes (item 8a, 2026-10-03):
               contacts, every side covered once), so a level jump of two or an
               overlapped refinement stops the scorer.
 
+Walls (item 8e, 2026-10-18; --walls x|y|xy). On a walled axis nothing enters
+the domain and the pulse leaves through the outflow wall, so the exact
+solution is the free-space Gaussian on that axis (no image, no wrap) and the
+discrete mass is NOT conserved: it follows the exact remaining fraction
+  f(t) = prod over walled axes of 1/2 [erf((hi - c_t)/sigma) - erf((lo - c_t)/sigma)]
+(1 on a periodic axis). In this mode the mass column reports
+max_t |m(t) - m(0) f(t)/f(0)| / m(0) -- the error of the drained mass against
+the exact drain -- and the final remaining fraction next to the exact one.
+That error is a discretization property (the outflow flux of an
+under-resolved pulse), not round-off, so it is reported and never gated;
+the L2 bracket still gates unless --no-l2-gate. Mesh2 is built with the same
+walls, so a wrap contact across a wall is refused.
+
 What the mass check cannot see -- by construction, pinned in the tests: a
 coarsen or refine that puts a child's data in the wrong quadrant conserves
 mass exactly, because the four quadrants of a parent have equal area. Child
@@ -64,6 +77,13 @@ Run -- an in-solve adaptive run (item 8a), L2 informational:
     python -m tools.bracket_2d --adaptive --no-l2-gate \\
         --run 4x4=<abs dir> --run insolve=<abs dir> --run 8x8=<abs dir>
 
+Run -- the item-8e walled and channel runs:
+
+    python -m tools.bracket_2d --adaptive --no-l2-gate --walls xy \\
+        --run 4x4=<abs dir> --run insolve=<abs dir> --run 8x8=<abs dir>
+    python -m tools.bracket_2d --adaptive --no-l2-gate --walls y \\
+        --run 4x4=<abs dir> --run insolve=<abs dir> --run 8x8=<abs dir>
+
 Named regressions:
   - reproduces tools/jexpresso/vtu_error.jl's banked 10x20 value
     3.042960147959e-03 from the convergence study's vtu:
@@ -75,13 +95,15 @@ Named regressions:
 
 import argparse
 import glob
+import math
 import os
 import re
 import sys
 
 import numpy as np
 
-from tools.analytic_operator_2d import GATE_CX, GATE_CY, GATE_DOMAIN, GATE_NEX, GATE_NEY, GATE_NOP
+from tools.analytic_operator_2d import (GATE_CX, GATE_CY, GATE_DOMAIN, GATE_NEX, GATE_NEY,
+                                        GATE_NOP, wall_axes)
 from tools.analytic_operator_2d_mortar import geometric_mass
 from tools.gate_2d_mortar import GEOM_TOL, Mesh2
 
@@ -159,19 +181,52 @@ def load_frames(run_dir, field="q"):
     return frames
 
 
+def _centre(domain, centre0):
+    (x0, x1), _ = domain
+    return (0.5 * (x0 + x1), 8.0) if centre0 is None else centre0
+
+
 def gaussian_exact(x, y, t, domain=GATE_DOMAIN, centre0=None, c=(GATE_CX, GATE_CY),
-                   sigma=(1.0, 1.0), amp=1.0):
-    """The IC Gaussian translated by c*t on the doubly periodic domain, as the
-    image sum over the nearest images in each direction."""
+                   sigma=(1.0, 1.0), amp=1.0, walls=()):
+    """The IC Gaussian translated by c*t: on a periodic axis as the image sum
+    over the nearest images (centre wrapped into the domain); on a walled axis
+    the free-space Gaussian with no image and no wrap -- nothing enters a
+    walled domain, so the exact solution is the translate, clipped by the
+    domain."""
     (x0, x1), (y0, y1) = domain
     lx, ly = x1 - x0, y1 - y0
-    if centre0 is None:
-        centre0 = (0.5 * (x0 + x1), 8.0)
-    xc = x0 + (centre0[0] + c[0] * t - x0) % lx
-    yc = y0 + (centre0[1] + c[1] * t - y0) % ly
-    gx = sum(np.exp(-((x - xc - k * lx) / sigma[0]) ** 2) for k in (-1, 0, 1))
-    gy = sum(np.exp(-((y - yc - k * ly) / sigma[1]) ** 2) for k in (-1, 0, 1))
+    cx0, cy0 = _centre(domain, centre0)
+    axes = wall_axes(walls)
+    xc_free, yc_free = cx0 + c[0] * t, cy0 + c[1] * t
+    if 0 in axes:
+        gx = np.exp(-((x - xc_free) / sigma[0]) ** 2)
+    else:
+        xc = x0 + (xc_free - x0) % lx
+        gx = sum(np.exp(-((x - xc - k * lx) / sigma[0]) ** 2) for k in (-1, 0, 1))
+    if 1 in axes:
+        gy = np.exp(-((y - yc_free) / sigma[1]) ** 2)
+    else:
+        yc = y0 + (yc_free - y0) % ly
+        gy = sum(np.exp(-((y - yc - k * ly) / sigma[1]) ** 2) for k in (-1, 0, 1))
     return amp * gx * gy
+
+
+def remaining_mass_fraction(t, domain=GATE_DOMAIN, centre0=None, c=(GATE_CX, GATE_CY),
+                            sigma=(1.0, 1.0), walls=()):
+    """The fraction of the free-space Gaussian's mass inside the domain at
+    time t: per walled axis 1/2 [erf((hi - c_t)/sigma) - erf((lo - c_t)/sigma)],
+    1 per periodic axis. Equals 1 for all t with no walls."""
+    (x0, x1), (y0, y1) = domain
+    cx0, cy0 = _centre(domain, centre0)
+    axes = wall_axes(walls)
+    f = 1.0
+    if 0 in axes:
+        xc = cx0 + c[0] * t
+        f *= 0.5 * (math.erf((x1 - xc) / sigma[0]) - math.erf((x0 - xc) / sigma[0]))
+    if 1 in axes:
+        yc = cy0 + c[1] * t
+        f *= 0.5 * (math.erf((y1 - yc) / sigma[1]) - math.erf((y0 - yc) / sigma[1]))
+    return f
 
 
 def _same_mesh(a, b):
@@ -187,17 +242,20 @@ def _same_mesh(a, b):
 
 
 def score_run(run_dir, nop=GATE_NOP, domain=GATE_DOMAIN, nex=GATE_NEX, ney=GATE_NEY,
-              exact=gaussian_exact, adaptive=False):
+              exact=gaussian_exact, adaptive=False, walls=()):
     """Score one run. Each frame's mesh is derived from that frame's own node
     coordinates (rebuilt only when the coordinates change). Static mode
     (adaptive=False) refuses a run whose mesh changes; adaptive mode scores
-    every frame on its own mesh and records where the mesh changed."""
+    every frame on its own mesh and records where the mesh changed. With
+    walls, the exact solution and the exact remaining-mass fraction follow the
+    walled axes (module docstring)."""
+    axes = wall_axes(walls)
     frames = load_frames(run_dir)
     per_frame, mesh, prev_xy = [], None, None
     for n, t, x, y, q in frames:
         changed = False
         if prev_xy is None or not (np.array_equal(x, prev_xy[0]) and np.array_equal(y, prev_xy[1])):
-            m = Mesh2(x, y, nop, domain, nex, ney)
+            m = Mesh2(x, y, nop, domain, nex, ney, walls=axes)
             changed = mesh is not None and not _same_mesh(m, mesh)
             if changed and not adaptive:
                 raise ValueError(f"{run_dir}: the mesh changes between frames (iter_{n}, "
@@ -207,12 +265,18 @@ def score_run(run_dir, nop=GATE_NOP, domain=GATE_DOMAIN, nex=GATE_NEX, ney=GATE_
             prev_xy = (x, y)
         per_frame.append(dict(iter=n, t=t, nelem=mesh.nelem,
                               levels=np.bincount(mesh.level).tolist(), changed=changed,
-                              mass=float(geometric_mass(mesh) @ q)))
+                              mass=float(geometric_mass(mesh) @ q),
+                              frac_exact=remaining_mass_fraction(t, domain=domain, walls=axes)))
     _, t, x, y, q = frames[-1]
     w = geometric_mass(mesh)
-    e = q - exact(x, y, t, domain=domain)
+    e = q - exact(x, y, t, domain=domain, walls=axes)
     masses = np.array([f["mass"] for f in per_frame])
+    fracs = np.array([f["frac_exact"] for f in per_frame])
     nelems = [f["nelem"] for f in per_frame]
+    m0 = masses[0]
+    mass_exact = m0 * fracs / fracs[0]
+    for f, me in zip(per_frame, mass_exact, strict=False):
+        f["mass_exact"] = float(me)
     return dict(
         n=len(q), nelem=mesh.nelem, levels=np.bincount(mesh.level).tolist(),
         nframes=len(frames), t_final=t,
@@ -220,18 +284,30 @@ def score_run(run_dir, nop=GATE_NOP, domain=GATE_DOMAIN, nex=GATE_NEX, ney=GATE_
         nelem_min=min(nelems), nelem_max=max(nelems),
         frames=per_frame,
         l2=float(np.sqrt(w @ e ** 2)), maxabs=float(np.max(np.abs(e))),
-        mass0=masses[0], mass_drift=float(np.max(np.abs(masses - masses[0])) / abs(masses[0])),
+        mass0=m0, mass_drift=float(np.max(np.abs(masses - m0)) / abs(m0)),
+        mass_err=float(np.max(np.abs(masses - mass_exact)) / abs(m0)),
+        frac_final=float(masses[-1] / m0), frac_final_exact=float(fracs[-1] / fracs[0]),
+        walled=bool(axes),
     )
 
 
 def print_frames(label, r):
     """The per-frame table of an adaptive run; '*' marks a frame whose mesh
-    differs from the previous frame's."""
+    differs from the previous frame's. With walls the last two columns are
+    the remaining fraction and its exact value."""
     print(f"  {label}: {r['nframes']} frames, {r['n_meshes']} meshes, "
           f"nelem {r['nelem_min']}..{r['nelem_max']}")
+    m0 = r["frames"][0]["mass"]
+    if r["walled"]:
+        print(f"    {'iter':>5s} {'t':>7s} {'nelem':>5s} {'levels':>12s} {'mesh':>4s} "
+              f"{'m/m0':>10s} {'exact':>10s} {'(m - m_ex)/m0':>14s}")
+        for f in r["frames"]:
+            print(f"    {f['iter']:5d} {f['t']:7.3f} {f['nelem']:5d} {str(f['levels']):>12s} "
+                  f"{'*' if f['changed'] else '':>4s} {f['mass'] / m0:10.6f} "
+                  f"{f['mass_exact'] / m0:10.6f} {(f['mass'] - f['mass_exact']) / abs(m0):14.3e}")
+        return
     print(f"    {'iter':>5s} {'t':>7s} {'nelem':>5s} {'levels':>12s} {'mesh':>4s} "
           f"{'(m - m0)/m0':>12s}")
-    m0 = r["frames"][0]["mass"]
     for f in r["frames"]:
         print(f"    {f['iter']:5d} {f['t']:7.3f} {f['nelem']:5d} {str(f['levels']):>12s} "
               f"{'*' if f['changed'] else '':>4s} {(f['mass'] - m0) / abs(m0):12.3e}")
@@ -245,14 +321,18 @@ def main(argv=None):
     ap.add_argument("--ney", type=int, default=GATE_NEY, help="base-grid elements in y")
     ap.add_argument("--nop", type=int, default=GATE_NOP)
     ap.add_argument("--mass-tol", type=float, default=1e-12,
-                    help="max relative mass drift per run")
+                    help="max relative mass drift per run (periodic domains only)")
     ap.add_argument("--adaptive", action="store_true",
                     help="allow the mesh to change between frames (in-solve adaptation); "
                          "score each frame on its own mesh and print a per-frame table")
     ap.add_argument("--no-l2-gate", action="store_true",
                     help="report L2 and its ratios, but do not gate the verdict on "
                          "L2 decreasing across the runs (mass still gates)")
+    ap.add_argument("--walls", default="none", choices=("none", "x", "y", "xy"),
+                    help="walled axes (item 8e): free-space exact solution on those axes, "
+                         "mass compared to the exact remaining fraction and not gated")
     args = ap.parse_args(argv)
+    walls = () if args.walls == "none" else args.walls
 
     runs = []
     for spec in args.run:
@@ -261,25 +341,40 @@ def main(argv=None):
             ap.error(f"--run needs LABEL=DIR, got {spec!r}")
         runs.append((label, d))
 
-    print("=" * 96)
+    print("=" * 110)
     print(f"BRACKET 2D: nop={args.nop} base {args.nex}x{args.ney} domain={GATE_DOMAIN} "
           f"mode={'adaptive' if args.adaptive else 'static'} "
-          f"L2 gate={'off' if args.no_l2_gate else 'on'}")
-    print("=" * 96)
-    print(f"{'run':8s} {'n':>6s} {'nelem':>5s} {'levels':>10s} {'frames':>6s} {'t':>5s} "
-          f"{'L2':>14s} {'max|e|':>11s} {'mass(t=0)':>19s} {'mass drift':>11s}")
+          f"L2 gate={'off' if args.no_l2_gate else 'on'} walls={args.walls}")
+    print("=" * 110)
+    if walls:
+        print(f"{'run':8s} {'n':>6s} {'nelem':>5s} {'levels':>10s} {'frames':>6s} {'t':>5s} "
+              f"{'L2':>14s} {'max|e|':>11s} {'mass(t=0)':>19s} {'mass err':>10s} "
+              f"{'m/m0 end':>9s} {'exact':>9s}")
+    else:
+        print(f"{'run':8s} {'n':>6s} {'nelem':>5s} {'levels':>10s} {'frames':>6s} {'t':>5s} "
+              f"{'L2':>14s} {'max|e|':>11s} {'mass(t=0)':>19s} {'mass drift':>11s}")
     res = []
     for label, d in runs:
-        r = score_run(d, nop=args.nop, nex=args.nex, ney=args.ney, adaptive=args.adaptive)
+        r = score_run(d, nop=args.nop, nex=args.nex, ney=args.ney, adaptive=args.adaptive,
+                      walls=walls)
         res.append((label, r))
-        print(f"{label:8s} {r['n']:6d} {r['nelem']:5d} {str(r['levels']):>10s} {r['nframes']:6d} "
-              f"{r['t_final']:5.2f} {r['l2']:14.6e} {r['maxabs']:11.3e} {r['mass0']:19.12e} "
-              f"{r['mass_drift']:11.3e}")
+        if walls:
+            print(f"{label:8s} {r['n']:6d} {r['nelem']:5d} {str(r['levels']):>10s} {r['nframes']:6d} "
+                  f"{r['t_final']:5.2f} {r['l2']:14.6e} {r['maxabs']:11.3e} {r['mass0']:19.12e} "
+                  f"{r['mass_err']:10.3e} {r['frac_final']:9.6f} {r['frac_final_exact']:9.6f}")
+        else:
+            print(f"{label:8s} {r['n']:6d} {r['nelem']:5d} {str(r['levels']):>10s} {r['nframes']:6d} "
+                  f"{r['t_final']:5.2f} {r['l2']:14.6e} {r['maxabs']:11.3e} {r['mass0']:19.12e} "
+                  f"{r['mass_drift']:11.3e}")
         print(f"         {d}")
     failures = []
-    for label, r in res:
-        if r["mass_drift"] > args.mass_tol:
-            failures.append(f"mass drift {label}")
+    if walls:
+        print("  (not gated) mass is not conserved on a walled domain; the mass err column is "
+              "the drained mass against the exact erf fraction")
+    else:
+        for label, r in res:
+            if r["mass_drift"] > args.mass_tol:
+                failures.append(f"mass drift {label}")
     for (la, ra), (lb, rb) in zip(res, res[1:], strict=False):
         if not rb["l2"] < ra["l2"]:
             if args.no_l2_gate:
@@ -290,12 +385,12 @@ def main(argv=None):
         print("  L2 ratios: " + ", ".join(
             f"{la}/{lb} = {ra['l2'] / rb['l2']:.3f}" for (la, ra), (lb, rb) in zip(res, res[1:], strict=False)))
     if args.adaptive:
-        print("-" * 96)
+        print("-" * 110)
         for label, r in res:
             print_frames(label, r)
-    print("=" * 96)
+    print("=" * 110)
     print("VERDICT: " + ("PASS" if not failures else "FAIL (" + "; ".join(failures) + ")"))
-    print("=" * 96)
+    print("=" * 110)
     return 0 if not failures else 1
 
 
