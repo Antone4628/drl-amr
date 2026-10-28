@@ -60,7 +60,7 @@ after the transfer) is the amr_strategy! probe's measurement; this tool sees
 output frames only.
 
 The exact solution defaults to the advection2d_dg family's IC (initialize.jl:
-A = 1, centre (domain x-centre, 8), sigma 1) advected by c = (0.5, 1.0); every
+A = 1, center (domain x-center, 8), sigma 1) advected by c = (0.5, 1.0); every
 parameter is overridable.
 
 Run -- the item-7 bracket:
@@ -189,7 +189,7 @@ def _centre(domain, centre0):
 def gaussian_exact(x, y, t, domain=GATE_DOMAIN, centre0=None, c=(GATE_CX, GATE_CY),
                    sigma=(1.0, 1.0), amp=1.0, walls=()):
     """The IC Gaussian translated by c*t: on a periodic axis as the image sum
-    over the nearest images (centre wrapped into the domain); on a walled axis
+    over the nearest images (center wrapped into the domain); on a walled axis
     the free-space Gaussian with no image and no wrap -- nothing enters a
     walled domain, so the exact solution is the translate, clipped by the
     domain."""

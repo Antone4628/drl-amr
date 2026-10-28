@@ -181,7 +181,7 @@ def build_analytic_operator_2d(nop, nex, ney, cx, cy,
     Returns the dense (n, n) operator, n = nex*ney*ngl^2.
 
     Note: assembly is accumulation (+=) throughout, so meshes where an
-    element is its own periodic neighbour (nex < 3 or ney < 3) are still
+    element is its own periodic neighbor (nex < 3 or ney < 3) are still
     assembled correctly -- but the gate deliberately uses 4x4 so that no
     self-coupling enters (roadmap: a terrible first thing to debug against).
     """
@@ -303,7 +303,7 @@ def structural_report(L, m):
     the 2D operator on a uniform tensor mesh is a Kronecker sum, so its
     spectrum is {lam_i + lam_j} over the two 1D sub-spectra -- and each
     conjugate pair contributes lam + conj(lam) = 2*Re(lam) with the
-    imaginary parts cancelled exactly. High-order upwind's physical modes
+    imaginary parts canceled exactly. High-order upwind's physical modes
     hug the imaginary axis (Re ~ -theta^(2p+2): ~ -2e-7 for the p=4,
     4-element chain), so those sums land ~4e-7 -- inside 1e-6*rho -- while
     the TRUE kernel (the constant) sits at machine zero (~1e-15). The gate
@@ -312,7 +312,7 @@ def structural_report(L, m):
       n_zero_modes      |lambda| < 1e-10*rho  -- the genuine kernel (expect 1
                                                  on a periodic mesh, 0 on a
                                                  mesh with an inflow wall)
-      n_near_zero_modes |lambda| < 1e-6*rho   -- kernel + conjugate-cancelled
+      n_near_zero_modes |lambda| < 1e-6*rho   -- kernel + conjugate-canceled
                                                  physical pairs (informational)
     """
     n = L.shape[0]

@@ -297,7 +297,7 @@ class MultiroundDriver:
         Returns {'transition': 'element'|'interval'|'done', 'skipped': int}.
         Round transitions (queue exhausted, more rounds remain) are absorbed
         here and surface as 'element' (the first element of the next round) —
-        matching the env. Interval/done are signalled back to step() to run the
+        matching the env. Interval/done are signaled back to step() to run the
         solver advance + global reward. In batch mode the staged round is
         committed (core.apply_round) at each round/interval boundary.
         """

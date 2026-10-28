@@ -435,7 +435,7 @@ def test_wrong_half_across_the_wrap_caught_by_wrap_rows():
 
 # The detection matrix on a mesh whose mortars include wrap ones (measured
 # 2026-10-15, both legs). One row changes: a CENTRAL mortar flux couples both
-# ways, so the element upwind of a wrap mortar sees its downwind neighbour's
+# ways, so the element upwind of a wrap mortar sees its downwind neighbor's
 # trace across the wrap -- and x^a at x = 5 is not x^a at x = -5. On the
 # interior mesh that reverse coupling carries a continuous polynomial and is
 # invisible to exactness; across the wrap it is a jump on the upwind side's
@@ -583,7 +583,7 @@ def test_walled_spec_operators_pass_both_legs():
 # consistency, exactness and the far rows -- so the gate certifies the
 # operator as the mirror construction builds it, not merely "some" wall
 # condition. The mortar rows carry over from DETECTION with one measured
-# difference: an uncoupled mortar whose downwind neighbours have inflow walls
+# difference: an uncoupled mortar whose downwind neighbors have inflow walls
 # of their own is damped by their penalty, so the spectrum stays in the left
 # half-plane (walled_corner_ll), while at the outflow corner it does not
 # (walled_corner_ur, as on the periodic mesh); and across the wrap a central

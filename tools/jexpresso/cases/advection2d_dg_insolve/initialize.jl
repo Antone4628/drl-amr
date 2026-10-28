@@ -69,7 +69,7 @@ end
 # elements 2.5 x 5) that the pulse starts in -- x in [-2.5, 2.5], y in
 # [5, 10]; the pulse starts at (0, 8), on their shared edge. Selected by
 # element centroid ((-1.25, 7.5) and (1.25, 7.5)); the box half-widths sit
-# strictly between those centroids and the neighbours'. The level guard keeps
+# strictly between those centroids and the neighbors'. The level guard keeps
 # the driver from re-flagging the children. Runs before initialize(), so it
 # sees geometry only.
 function user_get_preadapt_flags!(adapt_flags, inputs, mesh, old_ad_lvl, connijk, nelem, ngl, max_level)

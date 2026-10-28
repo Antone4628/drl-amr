@@ -46,7 +46,7 @@ Independence caveats -- read before trusting agreement:
   - This is one reading of the same specification Jexpresso's mortar loop
     implements. A misreading of the SPEC shared by both would agree here;
     the structural checks [5]-[9] of the gate do not depend on the spec's
-    details and are the defence against that.
+    details and are the defense against that.
   - Face contacts come from gate_2d_mortar.Mesh2, the instrument's own
     topology derivation; its tests pin that topology to hand-counted values
     on the gate mesh.

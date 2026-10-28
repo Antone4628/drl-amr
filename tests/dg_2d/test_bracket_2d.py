@@ -7,7 +7,7 @@ Jexpresso output tree and is run by hand; these pins cover what can go wrong
 without it:
 
   1. the exact solution: at t = 4 it equals vtu_error.jl's image-sum Gaussian
-     (centre (2, 12)), restated independently here; it wraps periodically
+     (center (2, 12)), restated independently here; it wraps periodically
   2. the reader: a raw-appended VTU written here round-trips exactly, and a
      Float32 field or a frame with no time source is refused -- an L2 against
      the wrong time, or a mass check at single precision, would be silent
@@ -30,7 +30,7 @@ without it:
   8. walls (item 8e): on a walled axis the exact solution has no image and no
      wrap, and nothing changes on a periodic one; the exact remaining-mass
      fraction has its closed-form values (1 at t = 0, exactly 1/2 in x when
-     the centre sits on the right wall, ~0 once the pulse has left); a walled
+     the center sits on the right wall, ~0 once the pulse has left); a walled
      run whose frames carry the exact field drained exactly reads L2 = 0 and
      mass err at round-off; mass is reported and not gated with --walls.
 
@@ -111,14 +111,14 @@ def test_exact_matches_vtu_error_formula_at_t4():
     def g(u, c, period):
         return sum(np.exp(-(u - c - k * period) ** 2) for k in (-1, 0, 1))
 
-    ref = g(x, 2.0, lx) * g(y, 12.0, ly)          # vtu_error.jl: centre (2, 12)
+    ref = g(x, 2.0, lx) * g(y, 12.0, ly)          # vtu_error.jl: center (2, 12)
     assert np.max(np.abs(gaussian_exact(x, y, 4.0) - ref)) < 1e-15
 
 
 def test_exact_wraps_periodically():
     x = np.array([-4.0, 0.0, 4.9])
     y = np.array([1.0, 10.0, 19.0])
-    # c = (0.5, 1.0): after one full y-period (t = 20) the centre is x = 0 + 10 = 0 mod 10
+    # c = (0.5, 1.0): after one full y-period (t = 20) the center is x = 0 + 10 = 0 mod 10
     assert np.allclose(gaussian_exact(x, y, 20.0), gaussian_exact(x, y, 0.0), atol=1e-14)
 
 
@@ -308,12 +308,12 @@ def test_walled_exact_has_no_image_and_no_wrap():
     rng = np.random.default_rng(5)
     x = rng.uniform(-5, 5, 200)
     y = rng.uniform(0, 20, 200)
-    # fully walled: the free-space translate, centre (0 + 0.5 t, 8 + t)
+    # fully walled: the free-space translate, center (0 + 0.5 t, 8 + t)
     t = 12.0
     free = np.exp(-(x - 6.0) ** 2) * np.exp(-(y - 20.0) ** 2)
     assert np.max(np.abs(gaussian_exact(x, y, t, walls="xy") - free)) < 1e-15
     # the channel: walls in y only -- image sum in x, free space in y
-    gx = sum(np.exp(-(x - (-4.0) - k * 10.0) ** 2) for k in (-1, 0, 1))   # centre x = 6 -> -4
+    gx = sum(np.exp(-(x - (-4.0) - k * 10.0) ** 2) for k in (-1, 0, 1))   # center x = 6 -> -4
     chan = gx * np.exp(-(y - 20.0) ** 2)
     assert np.max(np.abs(gaussian_exact(x, y, t, walls="y") - chan)) < 1e-15
     # no walls: unchanged
@@ -325,7 +325,7 @@ def test_remaining_mass_fraction_closed_form():
     assert remaining_mass_fraction(14.0) == 1.0
     f0 = remaining_mass_fraction(0.0, walls="xy")
     assert abs(f0 - 1.0) < 1e-10                                       # pulse well inside
-    # centre on the right wall at t = 10 (x_c = 5): exactly half in x; y_c = 18
+    # center on the right wall at t = 10 (x_c = 5): exactly half in x; y_c = 18
     fx = 0.5 * (math.erf(0.0) + math.erf(10.0))
     fy = 0.5 * (math.erf(2.0) + math.erf(18.0))
     assert abs(remaining_mass_fraction(10.0, walls="xy") - fx * fy) < 1e-15

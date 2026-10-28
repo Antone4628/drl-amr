@@ -246,7 +246,7 @@ def main(argv=None):
           f"(|lam| < 1e-10*rho) = {rep['n_zero_modes']} (expect 1)  "
           f"{'PASS' if ok else 'FAIL'}")
     print(f"    near-zero band (|lam| < 1e-6*rho): "
-          f"{rep['n_near_zero_modes']} -- kernel + conjugate-cancelled "
+          f"{rep['n_near_zero_modes']} -- kernel + conjugate-canceled "
           f"physical pairs (Kronecker-sum spectrum; informational, see "
           f"analytic_operator_2d.structural_report)")
     print(f"    smallest |lambda|: ["

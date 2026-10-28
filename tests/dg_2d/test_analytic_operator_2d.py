@@ -17,7 +17,7 @@ with no Jexpresso artifact:
   2. Structural invariants at the gate configuration: conservation,
      consistency, dissipative spectrum with exactly one zero mode.
   3. Upwind direction under negative velocity: for cx < 0 the flux takes the
-     right state, so the downwind (L) trace row couples to its +x neighbour
+     right state, so the downwind (L) trace row couples to its +x neighbor
      and the R rows receive no face contribution.
 
 The inline 1D reference below is a documented copy of
@@ -161,11 +161,11 @@ def test_gate_spectrum(gate_operator):
 
     The genuine kernel (the constant, |lambda| ~ 1e-15) is counted at the
     tight 1e-10*rho threshold: exactly 1. The looser 1e-6*rho band contains
-    3 at the gate configuration -- the kernel plus one conjugate-cancelled
+    3 at the gate configuration -- the kernel plus one conjugate-canceled
     physical pair at |lambda| = 2|Re(lam_phys)| ~ 3.7e-7: the 2D operator is
     a Kronecker sum (and cx/dx = cy/dy makes the two 1D sub-operators the
     same matrix here), so lam + conj(lam) = 2*Re(lam) enters the spectrum
-    with imaginary parts cancelled, and p=4 upwind's physical dissipation
+    with imaginary parts canceled, and p=4 upwind's physical dissipation
     (~theta^(2p+2)) is ~2e-7 on a 4-element chain. Sandbox-verified
     2026-08-31: smallest |lambda| = 1.8e-15, 3.73e-7 (x2), 2.9e-4 (x2).
     Pinning the band count documents the phenomenon and catches spectral
@@ -180,7 +180,7 @@ def test_gate_spectrum(gate_operator):
         f"found {rep['n_zero_modes']}")
     assert rep["n_near_zero_modes"] == 3, (
         f"expected 3 modes in the near-zero band at the gate config "
-        f"(kernel + one conjugate-cancelled physical pair), "
+        f"(kernel + one conjugate-canceled physical pair), "
         f"found {rep['n_near_zero_modes']}; smallest |lambda| = "
         f"{rep['smallest_abs_lambda']}")
 
@@ -191,7 +191,7 @@ def test_gate_spectrum(gate_operator):
 
 def test_negative_cx_upwinds_from_the_right():
     """cx < 0: the numerical flux takes the RIGHT state. The L element's
-    x-max trace row must couple to its +x neighbour, and the R element's
+    x-max trace row must couple to its +x neighbor, and the R element's
     x-min rows must receive no face contribution (volume-only)."""
     nex, ney = 3, 5
     cx, cy = -0.7, 0.3
@@ -203,7 +203,7 @@ def test_negative_cx_upwinds_from_the_right():
     row_l = _dof(e_l, NGL - 1, k)
     row_r = _dof(e_r, 0, k)
     assert abs(L[row_l, _dof(e_r, 0, k)]) > 0.0, (
-        "cx < 0: downwind (L) trace row does not couple to its +x neighbour")
+        "cx < 0: downwind (L) trace row does not couple to its +x neighbor")
     assert L[row_r, _dof(e_l, NGL - 1, k)] == 0.0, (
         "cx < 0: upwind (R) trace row received a face contribution")
 

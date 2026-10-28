@@ -29,7 +29,7 @@ Per frame it writes a VTK polydata of element outlines (one line cell per
 element side, cell data `kind`, `wrap`, `level`, `elem`, `side`) and a `.pvd`
 time series, prints a census table, and can render stills and an animation
 with matplotlib (the field as the 16 bilinear sub-cells per element, the
-outlines coloured by kind with line width by level, mortar child sides inset
+outlines colored by kind with line width by level, mortar child sides inset
 so they read beside the parent's line).
 
 The census per frame, and the identity the classification must satisfy:
@@ -111,7 +111,7 @@ PARENT_LIGHT = "#6FA8DC"    # mortar parent under white ink: #1F5A96 sinks into 
 
 
 def kind_color(k, ink):
-    """The drawn colour of a side of kind k when the conforming sides are drawn in ink."""
+    """The drawn color of a side of kind k when the conforming sides are drawn in ink."""
     if k == CONFORMING:
         return ink
     if k == MORTAR_PARENT and ink == "white":
@@ -340,7 +340,7 @@ def render_frame(ax, mesh, cls, x=None, y=None, q=None, inset=0.05, lw=0.3,
                  ink="white", vmin=0.0, vmax=1.0, cmap="viridis", title=None):
     """Draw one frame on ax: the field (when given) as each element's 5x5
     nodal values on its 16 bilinear sub-cells, then every side as a line
-    coloured by kind, width growing with level, mortar child sides inset."""
+    colored by kind, width growing with level, mortar child sides inset."""
     from matplotlib.collections import LineCollection
     ngl = mesh.ngl
     if q is not None:
@@ -474,7 +474,7 @@ def main(argv=None):
                     help="base line width in points for a level-0 conforming side "
                          "(each level adds 40%%; non-conforming kinds 1.4x)")
     ap.add_argument("--ink", default="white", choices=("dark", "white"),
-                    help="colour of the conforming sides: white (the default, for lines "
+                    help="color of the conforming sides: white (the default, for lines "
                          "over the field) or the plate's dark ink")
     ap.add_argument("--vmin", type=float, default=0.0)
     ap.add_argument("--vmax", type=float, default=1.0)

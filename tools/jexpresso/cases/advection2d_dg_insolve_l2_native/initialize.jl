@@ -69,7 +69,7 @@ end
 # elements 1.25 x 2.5) that the pulse starts on -- x in [-1.25, 1.25],
 # y in [7.5, 10]; the pulse starts at (0, 8), on their shared edge. Selected
 # by element centroid ((-0.625, 8.75) and (0.625, 8.75)); the box half-widths
-# sit strictly between those centroids and the neighbours' (x at +-1.875,
+# sit strictly between those centroids and the neighbors' (x at +-1.875,
 # y at 6.25 and 11.25). The level guard keeps the driver from re-flagging the
 # children. Runs before initialize(), so it sees geometry only.
 function user_get_preadapt_flags!(adapt_flags, inputs, mesh, old_ad_lvl, connijk, nelem, ngl, max_level)
@@ -108,7 +108,7 @@ end
 # INSOLVE_SCRIPT=1 replaces the indicator with fixed flags by adapt index
 # (_INSOLVE_SCRIPT); each selection must match an exact element count or the
 # run stops, and adapts past the last scripted one flag nothing. The script
-# puts a level-2 family on the x-wrap so that balance refines its neighbours
+# puts a level-2 family on the x-wrap so that balance refines its neighbors
 # across the wrap, undoes a coarsen across the wrap, and runs a wrap element
 # through the Table arm's refine branch.
 #

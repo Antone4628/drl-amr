@@ -33,7 +33,7 @@ class FakeContract:
     grows with advance time (so max-over-interval accumulation is observable).
     refine grows the mesh by 1 (arity 2), coarsen merges a sibling pair. balance()
     returns a *configurable* cascade set (default empty) so cascade->consumed can
-    be tested without modelling real balance physics.
+    be tested without modeling real balance physics.
     """
 
     def __init__(self, *, n_base=4, max_level=2, wave_speed=1.0,

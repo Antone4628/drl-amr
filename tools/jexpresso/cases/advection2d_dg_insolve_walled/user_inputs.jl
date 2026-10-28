@@ -40,7 +40,7 @@ function user_inputs()
         # by WALL_PREADAPT (initialize.jl). WALL_GRID_ONLY=1 stops after the mesh
         # builds (the face-census legs); WALL_LAMR=0 holds the preadapted mesh
         # fixed for the operator-gate probe. The exact solution leaves through
-        # the right wall (centre at x = 5 at t = 10) and the top wall (y = 20 at
+        # the right wall (center at x = 5 at t = 10) and the top wall (y = 20 at
         # t = 12); by t = 14 the domain is empty to 1e-5 of the initial mass.
         #---------------------------------------------------------------------------
         :lpreadapt           => get(ENV, "WALL_STATIC", "0") != "1",
