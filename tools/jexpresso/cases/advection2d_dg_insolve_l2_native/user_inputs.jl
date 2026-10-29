@@ -8,7 +8,7 @@ function user_inputs()
         :ode_solver           => SSPRK33(), #ORK256(),#SSPRK33(), #SSPRK33(), #MSRK5(), #SSPRK54(),
         :Δt                   => 0.025,
         :ndiagnostics_outputs => 10,
-        :diagnostics_at_times => collect(0.0:0.5:parse(Float64, get(ENV, "INSOLVE_TEND", "20.0"))),  # every 0.5, on the adapt times (amr_freq*Δt)
+        :diagnostics_at_times => collect(0.0:parse(Float64, get(ENV, "INSOLVE_DT_OUT", "0.5")):parse(Float64, get(ENV, "INSOLVE_TEND", "20.0"))),  # every 0.5 by default (the adapt cadence); INSOLVE_DT_OUT=0.125 for the demonstration animations
         :lsource              => false,
         #:backend              => MetalBackend(),
         #:CL                   => NCL(), #CL() is defaults
