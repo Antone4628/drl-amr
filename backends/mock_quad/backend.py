@@ -8,10 +8,10 @@ The mesh is a list of leaves (backends/mock_quad/quadtree.py). The backend
 holds one mesh at a time, builds its topology arrays once per mesh_epoch, and
 hands the same read-only arrays to every SolverState of that epoch.
 
-Built so far (AGENT_2D_ROADMAP item 1.2, sittings 1 and 2): describe, reset,
-get_state, dry_run, apply_marks. The realization the two adapt verbs share is
-backends/mock_quad/realize.py. The interval verbs raise NotImplementedError
-until sitting 3.
+All nine verbs are in place (AGENT_2D_ROADMAP item 1.2); get_snapshot and
+reinitialize_ic are declared absent and raise. The realization the two adapt
+verbs share is backends/mock_quad/realize.py; the synthetic fields the two
+field verbs share are backends/mock_quad/fields.py.
 """
 from __future__ import annotations
 
@@ -19,18 +19,17 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 
+from backends.mock_quad.fields import AUX_FIELDS, INDICATORS, REDUCTIONS, check_names, evaluate, mass
 from backends.mock_quad.quadtree import Leaf, QuadGrid, order_leaves, topology, uniform_leaves
 from backends.mock_quad.realize import correspondence, realize
 from contract.backend import BackendInfo
-from contract.reports import AdaptReport, IntervalReport, PathSnapshot
+from contract.reports import AdaptReport, AuxFields, IntervalReport, PathSnapshot
 from contract.state import SolverState
 
-# Synthetic and named neutrally: nothing here is an error estimator.
-INDICATORS = ("ind_a", "ind_b")
-REDUCTIONS = ("scalar", "per_variable")
-
-# The feature's width, as fractions of the domain's shorter side.
-_WIDTH_BOUNDS = (0.02, 0.25)
+# The feature's width, as fractions of the domain's shorter side. The lower
+# bound keeps a feature visible at the centroids of a coarse mesh: on a 4x4
+# grid at level 1 the worst-placed centroid sees 21 % of its peak.
+_WIDTH_BOUNDS = (0.05, 0.25)
 
 
 class MockQuadBackend:
@@ -82,6 +81,7 @@ class MockQuadBackend:
         self._arrays: dict[str, np.ndarray] | None = None
         self._ic: dict[str, float] = {}
         self._amr_freq = 0
+        self._intervals = 0
         self._time = 0.0
 
     # --- What this backend is ----------------------------------------------
@@ -135,6 +135,7 @@ class MockQuadBackend:
 
         self._ic = {name: float(ic[name]) for name in params}
         self._amr_freq = int(amr_freq)
+        self._intervals = 0
         self._time = 0.0
         self._set_mesh(uniform_leaves(self._grid, initial_level))
         return self.get_state()
@@ -220,15 +221,89 @@ class MockQuadBackend:
         )
         return self.get_state(), report
 
-    # --- Not built yet -----------------------------------------------------
+    # --- The fields --------------------------------------------------------
 
     def compute_error(self, indicators: Sequence[str], reduction: str) -> dict[str, np.ndarray]:
-        """Not built yet (sitting 3)."""
-        raise NotImplementedError("compute_error: not built yet")
+        """Return one (n_active, n_comp) float64 array per indicator name.
 
-    def step_interval(self, accumulate: Sequence[str], cadence: int, aux: Sequence[str] = ()) -> IntervalReport:
-        """Not built yet (sitting 3)."""
-        raise NotImplementedError("step_interval: not built yet")
+        The synthetic fields of backends/mock_quad/fields.py, evaluated at
+        the current time on the current mesh. Stateless: every call returns
+        new arrays, which the caller owns, and changes nothing.
+
+        Raises:
+            ValueError: If an indicator or the reduction is not a registered
+                name. true_error is not an indicator: it is reachable
+                through step_interval's aux argument only.
+        """
+        self._require_reset()
+        check_names("indicators", indicators, INDICATORS)
+        return self._evaluate(indicators, reduction, self._time)
+
+    def _evaluate(self, names: Sequence[str], reduction: str, time: float) -> dict[str, np.ndarray]:
+        """Evaluate named fields on the current mesh at a given time."""
+        return evaluate(
+            names,
+            reduction,
+            self._nvar,
+            grid=self._grid,
+            centroid=self._arrays["centroid"],
+            h=self._arrays["h"],
+            ic=self._ic,
+            velocity=self._velocity,
+            time=time,
+        )
+
+    # --- The interval ------------------------------------------------------
+
+    def step_interval(
+        self, accumulate: Sequence[str], reduction: str, cadence: int, aux: Sequence[str] = ()
+    ) -> IntervalReport:
+        """Advance exactly one remesh interval. No mesh change.
+
+        The feature moves; the mesh, mesh_epoch and the state arrays do not.
+        The interval is amr_freq * 2**(finest level present) substeps. The
+        fields are sampled at its start, after every cadence-th substep and
+        after the last, and the elementwise maximum is returned.
+
+        Args:
+            accumulate: Indicator names to return in the report's acc.
+            reduction: scalar or per_variable.
+            cadence: Sample every this many substeps; at least 1.
+            aux: Training-only names to return in the report's aux:
+                true_error, or an indicator. Accumulated like acc.
+
+        Raises:
+            ValueError: If a name or the reduction is not registered, or
+                cadence is below 1. Nothing is changed.
+        """
+        self._require_reset()
+        check_names("accumulate", accumulate, INDICATORS)
+        check_names("aux", aux, INDICATORS + AUX_FIELDS)
+        if reduction not in REDUCTIONS:
+            raise ValueError(f"reduction: {reduction!r}, expected one of {list(REDUCTIONS)}")
+        if cadence < 1:
+            raise ValueError(f"cadence: {cadence}, expected at least 1")
+
+        interval_T = self._amr_freq * self._dt_base
+        n_substeps = self._amr_freq * 2 ** int(self._arrays["level"].max())
+        start = self._intervals * interval_T
+        names = list(dict.fromkeys([*accumulate, *aux]))
+        best: dict[str, np.ndarray] = {}
+        for j in range(n_substeps + 1):
+            if j % cadence == 0 or j == n_substeps:
+                sample = self._evaluate(names, reduction, start + j * interval_T / n_substeps)
+                for name, values in sample.items():
+                    best[name] = np.maximum(best[name], values) if name in best else values
+
+        self._intervals += 1
+        self._time = self._intervals * interval_T
+        return IntervalReport(
+            time=self._time,
+            n_substeps=n_substeps,
+            acc={name: best[name] for name in accumulate},
+            mass=mass(self._ic, self._nvar),
+            aux=AuxFields(fields={name: best[name] for name in aux}) if aux else None,
+        )
 
     # --- Optional verbs this backend does not offer ------------------------
 

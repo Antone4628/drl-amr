@@ -3,8 +3,8 @@
 
 AGENT_2D_ROADMAP item 1.2, sitting 1, signals Q3-Q9. The meshes here are
 uniform: reset is the only verb here that makes one. The adapt verbs
-(sitting 2) are tested in test_mock_backend_adapt.py. The interval verbs are
-sitting 3's; until then they raise.
+(sitting 2) are tested in test_mock_backend_adapt.py and the field verbs
+(sitting 3) in test_mock_backend_interval.py.
 
 Positions are pinned with rotate_cells=False unless a test is about the
 rotation.
@@ -41,7 +41,7 @@ def centroid_set(state):
     return {tuple(c) for c in state.centroid.tolist()}
 
 
-# --- Q8: the protocol, and what is not built yet ---------------------------
+# --- Q8: the protocol, and the verbs this backend does not offer -----------
 
 def test_the_mock_is_a_solver_backend():
     assert isinstance(periodic_backend(), SolverBackend)
@@ -50,14 +50,12 @@ def test_the_mock_is_a_solver_backend():
 @pytest.mark.parametrize(
     "call",
     [
-        lambda b: b.compute_error(["ind_a"], "scalar"),
-        lambda b: b.step_interval(["ind_a"], 1),
         lambda b: b.get_snapshot(),
         lambda b: b.reinitialize_ic(),
     ],
-    ids=["compute_error", "step_interval", "get_snapshot", "reinitialize_ic"],
+    ids=["get_snapshot", "reinitialize_ic"],
 )
-def test_unbuilt_and_absent_verbs_raise(call):
+def test_absent_verbs_raise(call):
     backend = periodic_backend()
     backend.reset(IC, amr_freq=10, initial_level=0)
     with pytest.raises(NotImplementedError):
@@ -85,7 +83,8 @@ def test_ic_bounds_come_from_the_domain():
     assert set(params) == {"x0", "y0", "width"}
     assert params["x0"] == (0.0, 3.0)
     assert params["y0"] == (0.0, 1.0)
-    assert params["width"] == (0.02, 0.25)
+    # 5 % to 25 % of the domain's shorter side, which is 1 here.
+    assert params["width"] == (0.05, 0.25)
 
 
 # --- the constructor -------------------------------------------------------
@@ -253,12 +252,19 @@ def test_an_old_state_is_untouched_by_a_new_mesh():
         ({"x0": 0.5, "y0": 0.5}, r"^ic: unknown names \[\], missing names \['width'\]"),
         ({**IC, "x0": 1.5}, r"^ic\['x0'\]: 1.5, expected within \[0.0, 1.0\]"),
         ({**IC, "width": 0.5}, r"^ic\['width'\]: 0.5"),
+        ({**IC, "width": 0.03}, r"^ic\['width'\]: 0.03, expected within \[0.05, 0.25\]"),
         ({**IC, "y0": float("nan")}, r"^ic\['y0'\]: nan"),
     ],
 )
 def test_bad_ic_rejected(ic, message):
     with pytest.raises(ValueError, match=message):
         periodic_backend().reset(ic, amr_freq=10)
+
+
+@pytest.mark.parametrize("width", [0.05, 0.25])
+def test_the_width_bounds_are_inclusive(width):
+    state = periodic_backend().reset({**IC, "width": width}, amr_freq=10)
+    assert state.n_active == 64
 
 
 @pytest.mark.parametrize(

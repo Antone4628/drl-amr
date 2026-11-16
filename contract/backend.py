@@ -134,17 +134,20 @@ class SolverBackend(Protocol):
         """
 
     def step_interval(
-        self, accumulate: Sequence[str], cadence: int, aux: Sequence[str] = ()
+        self, accumulate: Sequence[str], reduction: str, cadence: int, aux: Sequence[str] = ()
     ) -> IntervalReport:
         """Advance exactly one remesh interval. No mesh change.
 
         Args:
             accumulate: Indicator names whose maximum over the interval is
                 returned in IntervalReport.acc.
-            cadence: Sample the accumulated indicators every this many
-                solver steps.
+            reduction: The reduction from nvar to n_comp, as compute_error
+                takes it; it fixes the shape of every returned array.
+            cadence: Sample every this many solver steps. The samples are
+                the interval's start, every cadence-th step, and always the
+                last step.
             aux: Names of training-only fields to return in
-                IntervalReport.aux.
+                IntervalReport.aux, each accumulated like acc.
 
         Raises:
             BackendFailure: If the solve throws or the state is not finite.
