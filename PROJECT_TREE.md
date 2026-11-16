@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-09-28 14:38:23
+Generated: 2026-11-15 18:30:02
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -44,9 +44,14 @@ drl-amr/
 ├── configs/
 ├── contract/
 │   ├── __init__.py
+│   ├── _arrays.py
+│   ├── backend.py
+│   ├── checks.py
 │   ├── element_state.py
+│   ├── reports.py
 │   ├── solver_contract.py
-│   └── solver_snapshot.py
+│   ├── solver_snapshot.py
+│   └── state.py
 ├── deployment/
 │   ├── __init__.py
 │   ├── build.py
@@ -72,13 +77,20 @@ drl-amr/
 │   │   └── test_reward.py
 │   ├── analysis/
 │   │   └── test_deployment_viz.py
+│   ├── contract/
+│   │   ├── test_contract_backend.py
+│   │   ├── test_contract_reports.py
+│   │   └── test_contract_state.py
 │   ├── deployment/
 │   │   ├── test_evaluator.py
 │   │   └── test_runner.py
 │   ├── dg_2d/
+│   │   ├── test_amr_overlay_2d.py
 │   │   ├── test_analytic_operator_2d.py
 │   │   ├── test_bracket_2d.py
-│   │   └── test_gate_2d_mortar.py
+│   │   ├── test_gate_2d_mortar.py
+│   │   ├── test_gate_2d_permute_compare.py
+│   │   └── test_wrap_identity_check.py
 │   ├── drivers/
 │   │   └── test_driver.py
 │   ├── envs/
@@ -86,6 +98,8 @@ drl-amr/
 │   ├── fixtures/
 │   ├── integration/
 │   │   └── test_multiround_smoke.py
+│   ├── notes/
+│   │   └── test_split_records.py
 │   ├── python_1d/
 │   │   ├── amr/
 │   │   │   ├── test_adapt.py
@@ -108,8 +122,28 @@ drl-amr/
 │   └── __init__.py
 ├── tools/
 │   ├── jexpresso/
-│   │   └── meshes/
+│   │   ├── cases/
+│   │   │   ├── advection2d_dg_amr/
+│   │   │   ├── advection2d_dg_amr_native/
+│   │   │   ├── advection2d_dg_conv/
+│   │   │   ├── advection2d_dg_gate/
+│   │   │   ├── advection2d_dg_gate_native/
+│   │   │   ├── advection2d_dg_insolve/
+│   │   │   ├── advection2d_dg_insolve_l2/
+│   │   │   ├── advection2d_dg_insolve_l2_native/
+│   │   │   ├── advection2d_dg_insolve_native/
+│   │   │   ├── advection2d_dg_insolve_walled/
+│   │   │   └── advection2d_dg_walled/
+│   │   ├── meshes/
+│   │   │   └── generated/
+│   │   └── wrap_identity_check.py
+│   ├── notes/
+│   │   ├── split_records.py
+│   │   ├── system_map_view1.py
+│   │   ├── system_map_view2.py
+│   │   └── system_map_view3.py
 │   ├── __init__.py
+│   ├── amr_overlay_2d.py
 │   ├── analytic_operator_2d.py
 │   ├── analytic_operator_2d_mortar.py
 │   ├── balance_test.py
@@ -118,6 +152,7 @@ drl-amr/
 │   ├── dump_dg_operator.py
 │   ├── gate_2d_compare.py
 │   ├── gate_2d_mortar.py
+│   ├── gate_2d_permute_compare.py
 │   ├── plot_dg_1d.py
 │   ├── projection_exactness.py
 │   ├── run_manifest.py
