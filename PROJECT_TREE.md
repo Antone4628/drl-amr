@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-11-15 20:51:36
+Generated: 2026-11-16 07:18:21
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -22,7 +22,8 @@ drl-amr/
 │   ├── mock_quad/
 │   │   ├── __init__.py
 │   │   ├── backend.py
-│   │   └── quadtree.py
+│   │   ├── quadtree.py
+│   │   └── realize.py
 │   ├── python_1d/
 │   │   ├── amr/
 │   │   │   ├── __init__.py
@@ -103,8 +104,10 @@ drl-amr/
 │   ├── integration/
 │   │   └── test_multiround_smoke.py
 │   ├── mock_quad/
+│   │   ├── test_mock_backend_adapt.py
 │   │   ├── test_mock_backend_state.py
-│   │   └── test_mock_quadtree.py
+│   │   ├── test_mock_quadtree.py
+│   │   └── test_mock_realize.py
 │   ├── notes/
 │   │   └── test_split_records.py
 │   ├── python_1d/

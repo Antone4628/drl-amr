@@ -8,9 +8,10 @@ The mesh is a list of leaves (backends/mock_quad/quadtree.py). The backend
 holds one mesh at a time, builds its topology arrays once per mesh_epoch, and
 hands the same read-only arrays to every SolverState of that epoch.
 
-Built so far (AGENT_2D_ROADMAP item 1.2, sitting 1): describe, reset,
-get_state. The adapt verbs and the interval verbs raise NotImplementedError
-until their sittings.
+Built so far (AGENT_2D_ROADMAP item 1.2, sittings 1 and 2): describe, reset,
+get_state, dry_run, apply_marks. The realization the two adapt verbs share is
+backends/mock_quad/realize.py. The interval verbs raise NotImplementedError
+until sitting 3.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 
 from backends.mock_quad.quadtree import Leaf, QuadGrid, order_leaves, topology, uniform_leaves
+from backends.mock_quad.realize import correspondence, realize
 from contract.backend import BackendInfo
 from contract.reports import AdaptReport, IntervalReport, PathSnapshot
 from contract.state import SolverState
@@ -98,7 +100,7 @@ class MockQuadBackend:
                 "y0": (grid.lo[1], grid.hi[1]),
                 "width": (_WIDTH_BOUNDS[0] * shorter, _WIDTH_BOUNDS[1] * shorter),
             },
-            optional_verbs=frozenset(),
+            optional_verbs=frozenset({"dry_run"}),
         )
 
     # --- The episode and the state -----------------------------------------
@@ -176,19 +178,53 @@ class MockQuadBackend:
         if self._leaves is None:
             raise RuntimeError("no mesh yet: call reset first")
 
+    # --- The adapt ---------------------------------------------------------
+
+    def dry_run(self, marks: np.ndarray) -> tuple[int, np.ndarray]:
+        """Predict what apply_marks(marks) would realize, changing nothing.
+
+        Returns:
+            The predicted n_active, and the predicted realized flags,
+            (n_active,) int8.
+
+        Raises:
+            ValueError: If marks has the wrong shape, a non-integer dtype or
+                a value outside the vocabulary.
+        """
+        self._require_reset()
+        leaves, realized = realize(self._grid, self._leaves, marks)
+        return len(leaves), realized
+
+    def apply_marks(self, marks: np.ndarray) -> tuple[SolverState, AdaptReport]:
+        """Apply one round of marks and return the new state and the report.
+
+        The realization is realize's: refine, then coarsen complete families,
+        then corner balance, one level per call. mesh_epoch rises by one, for
+        a round of all HOLD too; time does not advance.
+
+        Raises:
+            ValueError: If marks has the wrong shape, a non-integer dtype or
+                a value outside the vocabulary. Nothing is changed.
+        """
+        self._require_reset()
+        new_leaves, realized = realize(self._grid, self._leaves, marks)
+        old_leaves, old_epoch = self._leaves, self._epoch
+        self._set_mesh(new_leaves)
+        new_to_old, new_kind = correspondence(old_leaves, self._leaves)
+        report = AdaptReport(
+            realized=realized,
+            new_to_old=new_to_old,
+            new_kind=new_kind,
+            epoch_old=old_epoch,
+            epoch_new=self._epoch,
+        )
+        return self.get_state(), report
+
     # --- Not built yet -----------------------------------------------------
 
     def compute_error(self, indicators: Sequence[str], reduction: str) -> dict[str, np.ndarray]:
         """Not built yet (sitting 3)."""
         raise NotImplementedError("compute_error: not built yet")
-
-    def dry_run(self, marks: np.ndarray) -> tuple[int, np.ndarray]:
-        """Not built yet (sitting 2)."""
-        raise NotImplementedError("dry_run: not built yet")
-
-    def apply_marks(self, marks: np.ndarray) -> tuple[SolverState, AdaptReport]:
-        """Not built yet (sitting 2)."""
-        raise NotImplementedError("apply_marks: not built yet")
 
     def step_interval(self, accumulate: Sequence[str], cadence: int, aux: Sequence[str] = ()) -> IntervalReport:
         """Not built yet (sitting 3)."""

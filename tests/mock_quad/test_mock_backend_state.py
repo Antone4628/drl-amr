@@ -2,8 +2,9 @@
 (backends/mock_quad/backend.py).
 
 AGENT_2D_ROADMAP item 1.2, sitting 1, signals Q3-Q9. The meshes here are
-uniform: reset is the only verb built that makes one. The adapt verbs and the
-interval verbs are sittings 2 and 3; until then they raise.
+uniform: reset is the only verb here that makes one. The adapt verbs
+(sitting 2) are tested in test_mock_backend_adapt.py. The interval verbs are
+sitting 3's; until then they raise.
 
 Positions are pinned with rotate_cells=False unless a test is about the
 rotation.
@@ -50,13 +51,11 @@ def test_the_mock_is_a_solver_backend():
     "call",
     [
         lambda b: b.compute_error(["ind_a"], "scalar"),
-        lambda b: b.dry_run(np.zeros(16, dtype=np.int8)),
-        lambda b: b.apply_marks(np.zeros(16, dtype=np.int8)),
         lambda b: b.step_interval(["ind_a"], 1),
         lambda b: b.get_snapshot(),
         lambda b: b.reinitialize_ic(),
     ],
-    ids=["compute_error", "dry_run", "apply_marks", "step_interval", "get_snapshot", "reinitialize_ic"],
+    ids=["compute_error", "step_interval", "get_snapshot", "reinitialize_ic"],
 )
 def test_unbuilt_and_absent_verbs_raise(call):
     backend = periodic_backend()
@@ -78,7 +77,7 @@ def test_describe_needs_no_reset_and_declares_what_is_built():
     assert (info.ndim, info.nvar) == (2, 3)
     assert info.indicators == INDICATORS == ("ind_a", "ind_b")
     assert info.reductions == REDUCTIONS == ("scalar", "per_variable")
-    assert info.optional_verbs == frozenset()
+    assert info.optional_verbs == frozenset({"dry_run"})
 
 
 def test_ic_bounds_come_from_the_domain():
