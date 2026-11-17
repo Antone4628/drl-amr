@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-11-16 13:33:41
+Generated: 2026-11-17 07:49:58
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -86,7 +86,8 @@ drl-amr/
 │   ├── contract/
 │   │   ├── test_contract_backend.py
 │   │   ├── test_contract_reports.py
-│   │   └── test_contract_state.py
+│   │   ├── test_contract_state.py
+│   │   └── test_contract_topology.py
 │   ├── deployment/
 │   │   ├── test_evaluator.py
 │   │   └── test_runner.py
@@ -110,7 +111,8 @@ drl-amr/
 │   │   ├── test_mock_backend_state.py
 │   │   ├── test_mock_fields.py
 │   │   ├── test_mock_quadtree.py
-│   │   └── test_mock_realize.py
+│   │   ├── test_mock_realize.py
+│   │   └── test_mock_topology_checks.py
 │   ├── notes/
 │   │   └── test_split_records.py
 │   ├── python_1d/
