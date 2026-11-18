@@ -7,12 +7,12 @@ delegation of reset/step/action_masks, and the MaskablePPO plumbing. Driven
 against the same controllable fake SolverContract pattern used by the driver
 tests, trimmed to the sequential surface (the env runs sequential only).
 
-NOTE: the alpha-normalized error components obs[0:3] are negative across the
-healthy regime (boundary o = -1), so the declared Box low = 0.0 on them is too
-tight (see MultiroundEnv module docstring). These tests therefore do NOT assert
-observation_space.contains(obs) and do NOT run gymnasium env_checker — both would
-flag that known-loose bound, which is held verbatim until the parity gate. Only
-the genuinely-bounded components are range-checked.
+NOTE: the declared bounds are the ones envs/multiround_env.py carries since
+D-053. The alpha-normalized error components obs[0:3] are unbounded on both
+sides (they are negative across the healthy regime, boundary o = -1), and
+resource_usage obs[6] is unbounded above. test_observation_space_bounds pins
+the declared Box; the other tests range-check only the genuinely-bounded
+components of the observations they see.
 """
 from __future__ import annotations
 
@@ -146,12 +146,12 @@ class FakeContract:
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
-def make_env(*, pre_advance=(0.0, 0.0), n_remesh=2, max_level=2, n_base=4, alpha=0.1):
+def make_env(*, n_remesh=2, max_level=2, n_base=4, alpha=0.1):
     fake = FakeContract(n_base=n_base, max_level=max_level)
     core = AgentCore(fake, alpha=alpha, element_budget=30)
     driver = MultiroundDriver(
         core, n_remesh=n_remesh, step_domain_fraction=0.05,
-        pre_advance_range=pre_advance, verbosity=0,
+        verbosity=0,
     )
     return MultiroundEnv(driver), fake
 
@@ -165,17 +165,21 @@ def test_action_space_is_discrete_three():
     assert env.action_space.n == 3
 
 
-def test_observation_space_matches_old_env():
+def test_observation_space_bounds():
     env, _ = make_env()
     box = env.observation_space
     assert isinstance(box, spaces.Box)
     assert box.shape == (OBS_DIM,)
     assert box.dtype == np.float32
-    # Bounds lifted verbatim from dg_amr_env_multiround.py (the parity target).
-    assert np.array_equal(box.low, np.zeros(OBS_DIM, dtype=np.float32))
+    # The bounds envs/multiround_env.py declares (D-053): the three error
+    # components unbounded on both sides, resource_usage unbounded above.
+    assert np.array_equal(
+        box.low,
+        np.array([-np.inf, -np.inf, -np.inf, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+    )
     assert np.array_equal(
         box.high,
-        np.array([np.inf, np.inf, np.inf, 1.0, 1.0, 1.0, 2.0, 1.0], dtype=np.float32),
+        np.array([np.inf, np.inf, np.inf, 1.0, 1.0, 1.0, np.inf, 1.0], dtype=np.float32),
     )
 
 
