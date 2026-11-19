@@ -1,20 +1,26 @@
 """Tests for agent/round_observation.py and agent/round_state.py: the actor
 observation of the 2D agent core and the two nouns it takes.
 
-AGENT_2D_ROADMAP item 2.2, sitting 1, signals S1-S12. Five groups:
+AGENT_2D_ROADMAP item 2.2: sitting 1's signals S1-S12 and sitting 2's T1-T7.
+Six groups:
 
   - the two nouns: what RoundState and ObservationConfig accept and reject
     (S10), and the feature names (S1);
   - on a literal state: the five-element instance of the explanation file's
     section 2.2.2, every number hand-set, so each feature can be read off
     (S2-S9), and what the builder rejects (S10);
+  - more than one column per indicator: the same instance with a second
+    variable, section 2.2.9 (T2-T5), and the bounds every vector lies
+    within (T7);
   - on the mock quad backend: the builder against a slow reference that
     finds every neighbor and family from the centroids and sizes alone,
-    never from the neighbor or family arrays (S11);
+    never from the neighbor or family arrays (S11), and per_variable
+    against scalar at nvar = 3 (T6);
   - at ndim = 1: the builder against the sequential core's
     build_observation on the same four-element mesh (S12).
 
-The cache at n_comp = 1 only; the per_variable scalarization is sitting 2's.
+The critic builder, the dict and the bounds themselves are in
+tests/agent/test_round_dict.py.
 
 Run: pytest tests/agent/test_round_observation.py -v
 """
@@ -29,7 +35,13 @@ import pytest
 from agent.normalization import normalized_error
 from agent.observation import build_observation
 from agent.round_cache import RoundCache, read_round
-from agent.round_observation import NORMALIZATIONS, ObservationConfig, actor_observation, feature_names
+from agent.round_observation import (
+    NORMALIZATIONS,
+    ObservationConfig,
+    actor_observation,
+    feature_bounds,
+    feature_names,
+)
 from agent.round_state import RoundState
 from backends.mock_quad.backend import MockQuadBackend
 from contract.checks import training_only_params
@@ -42,6 +54,9 @@ BUDGET = 8
 FLOOR = 8.0
 # The instance's raw errors, by position: cell A's four children, then cell B.
 ERRORS = np.array([1e-3, 1e-1, 1e-2, 1.0, 1e-4])
+# A second variable for the instance (section 2.2.9): about a thousand times
+# larger, with a different worst element.
+SECOND = np.array([1e3, 1.0, 10.0, 1e-1, 1e2])
 # Feature indices at 2D, in feature_names' order.
 ERROR_FEATURES = slice(0, 6)
 OWN_ERROR, FACE_ERRORS, FAMILY_ERROR = 0, slice(1, 5), 5
@@ -136,6 +151,26 @@ def instance(errors=ERRORS, **state_kwargs) -> RoundCache:
     return RoundCache(
         state=instance_state(**state_kwargs), errors={"ind": values}, indicators=("ind",), reduction="scalar"
     )
+
+
+def columns(*variables) -> RoundCache:
+    """A cache on the five-element mesh holding "ind" with one column per
+    argument, read under per_variable."""
+    values = np.column_stack([np.asarray(v, dtype=np.float64) for v in variables])
+    return RoundCache(
+        state=instance_state(), errors={"ind": values}, indicators=("ind",), reduction="per_variable"
+    )
+
+
+def per_variable(normalization="relative", **changes) -> ObservationConfig:
+    """The instance's configuration for a cache read under per_variable."""
+    return config(normalization, reduction="per_variable", **changes)
+
+
+def inside(obs: np.ndarray, cfg: ObservationConfig) -> bool:
+    """Whether a vector lies within feature_bounds, inclusive, no tolerance."""
+    low, high = feature_bounds(2, cfg)
+    return bool(((low <= obs) & (obs <= high)).all())
 
 
 # --- RoundState (S10) ------------------------------------------------------------
@@ -570,17 +605,196 @@ def test_a_numpy_integer_position_is_accepted():
     )
 
 
-def test_more_than_one_column_waits_for_sitting_2():
-    cache = RoundCache(
-        state=instance_state(), errors={"ind": np.ones((5, 3))}, indicators=("ind",), reduction="per_variable"
-    )
-    with pytest.raises(ValueError, match="^n_comp: 3, expected 1"):
-        actor_observation(cache, at(), 0, config(reduction="per_variable"))
+def test_dynamo_takes_one_column():
+    """The 1D rule reads an all-zero column as just above the threshold, so
+    it would win the maximum over columns at every element (T5)."""
+    with pytest.raises(
+        ValueError, match=r"^normalization: 'dynamo' takes one column per indicator, and the cache has n_comp = 2"
+    ):
+        actor_observation(columns(ERRORS, SECOND), at(), 0, per_variable("dynamo"))
 
 
 def test_a_mesh_that_cannot_refine_has_no_level_scale():
     with pytest.raises(ValueError, match="^max_level: 0, expected at least 1"):
         actor_observation(instance(max_level=0), at(), 0, config())
+
+
+# --- More than one column per indicator (T2-T5) ----------------------------------
+
+def test_two_columns_cell_b():
+    obs = actor_observation(columns(ERRORS, SECOND), at(5), 4, per_variable())
+    expected = [
+        0.0,  # own: column 1, on its threshold (column 0 reads -3)
+        1.0,  # x-min: column 0, position 3 (column 1 reads -2)
+        1.0,  # x-max: column 1, position 0 (column 0 reads -1)
+        0.0,  # y-min: a wall, its own
+        0.0,  # y-max: a wall, its own
+        0.0,  # no family: its own
+        0.0,
+        0.5,
+        0.5,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        0.625,
+        0.5,
+    ]
+    assert obs.tolist() == pytest.approx(expected, abs=1e-6)
+
+
+def test_two_columns_position_0():
+    obs = actor_observation(columns(ERRORS, SECOND), at(8), 0, per_variable())
+    expected = [
+        1.0,  # own: column 1, where it is the round's worst (column 0 reads -2)
+        0.0,  # x-min: cell B through the wrap, column 1 (column 0 reads -3)
+        0.0,  # x-max: position 1, column 0 (column 1 reads -2)
+        1.0,  # y-min: a wall, its own
+        -1.0,  # y-max: position 2, both columns
+        1.0,  # the family's largest, both columns
+        0.5,
+        0.0,
+        0.5,
+        0.5,
+        0.5,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+        0.5,
+    ]
+    assert obs.tolist() == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("position", range(5))
+def test_an_error_feature_is_the_larger_of_the_columns_own_features(position):
+    """Each column normalized alone, then the maximum, feature by feature:
+    bit for bit, since it is the same arithmetic in the same order."""
+    both = actor_observation(columns(ERRORS, SECOND), at(), position, per_variable())
+    first = actor_observation(columns(ERRORS), at(), position, per_variable())
+    second = actor_observation(columns(SECOND), at(), position, per_variable())
+    assert np.array_equal(both[ERROR_FEATURES], np.maximum(first[ERROR_FEATURES], second[ERROR_FEATURES]))
+    assert np.array_equal(both[OWN_LEVEL:], first[OWN_LEVEL:])
+
+
+def test_the_deciding_column_changes_from_feature_to_feature():
+    """Cell B's own error comes from column 1 and its x-min face from
+    column 0."""
+    first = actor_observation(columns(ERRORS), at(), 4, per_variable())
+    second = actor_observation(columns(SECOND), at(), 4, per_variable())
+    assert second[OWN_ERROR] > first[OWN_ERROR]
+    assert first[FACE_ERRORS][0] > second[FACE_ERRORS][0]
+
+
+def test_each_columns_worst_element_reads_minus_log10_alpha():
+    cache = columns(ERRORS, SECOND)
+    own = [actor_observation(cache, at(), p, per_variable())[OWN_ERROR] for p in range(5)]
+    top = -math.log10(ALPHA)
+    assert own[3] == pytest.approx(top, abs=1e-6)  # column 0's worst
+    assert own[0] == pytest.approx(top, abs=1e-6)  # column 1's worst
+    assert max(own[1], own[2], own[4]) < top - 0.5
+
+
+@pytest.mark.parametrize("scale", [1e-6, 1e6])
+@pytest.mark.parametrize("column", [0, 1])
+def test_one_columns_scale_changes_no_feature(column, scale):
+    """What tells this rule from a raw maximum over columns (T3). To a
+    tolerance: a power of ten is not exact in binary."""
+    variables = [ERRORS, SECOND]
+    scaled = list(variables)
+    scaled[column] = variables[column] * scale
+    for position in range(5):
+        base = actor_observation(columns(*variables), at(), position, per_variable())
+        moved = actor_observation(columns(*scaled), at(), position, per_variable())
+        assert moved.tolist() == pytest.approx(base.tolist(), abs=1e-6), f"position {position}"
+
+
+def test_a_raw_maximum_over_columns_would_read_differently():
+    """Under a raw maximum the larger variable decides everything: cell B's
+    x-min face would read log10(1 / (alpha * 1e3)) = -2. It reads 1."""
+    raw = np.maximum(ERRORS, SECOND)
+    by_raw_maximum = actor_observation(instance(raw), at(), 4, config())[FACE_ERRORS][0]
+    by_the_rule = actor_observation(columns(ERRORS, SECOND), at(), 4, per_variable())[FACE_ERRORS][0]
+    assert by_raw_maximum == pytest.approx(-2.0, abs=1e-6)
+    assert by_the_rule == pytest.approx(1.0, abs=1e-6)
+
+
+def test_the_order_of_the_columns_changes_nothing():
+    for position in range(5):
+        forward = actor_observation(columns(ERRORS, SECOND), at(), position, per_variable())
+        backward = actor_observation(columns(SECOND, ERRORS), at(), position, per_variable())
+        assert np.array_equal(forward, backward)
+
+
+@pytest.mark.parametrize("zero_first", [False, True], ids=["zero second", "zero first"])
+def test_a_zero_column_drops_out(zero_first):
+    """Bit for bit (T4): an all-zero column is at the floor everywhere, and
+    the floor never wins a maximum."""
+    variables = (np.zeros(5), ERRORS) if zero_first else (ERRORS, np.zeros(5))
+    for position in range(5):
+        with_zero = actor_observation(columns(*variables), at(), position, per_variable())
+        alone = actor_observation(columns(ERRORS), at(), position, per_variable())
+        assert np.array_equal(with_zero, alone)
+
+
+def test_a_repeated_column_changes_nothing():
+    for position in range(5):
+        twice = actor_observation(columns(ERRORS, ERRORS), at(), position, per_variable())
+        once = actor_observation(columns(ERRORS), at(), position, per_variable())
+        assert np.array_equal(twice, once)
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATIONS)
+def test_one_column_under_per_variable_is_the_scalar_vector(normalization):
+    """A backend with one variable gives one column under either reduction,
+    and dynamo accepts it (T5)."""
+    for position in range(5):
+        one = actor_observation(columns(ERRORS), at(), position, per_variable(normalization))
+        scalar = actor_observation(instance(), at(), position, config(normalization))
+        assert np.array_equal(one, scalar)
+
+
+def test_three_equal_columns_put_every_element_at_the_top():
+    """Every element is the worst of every column, so every error feature
+    reads -log10(alpha)."""
+    cache = RoundCache(
+        state=instance_state(), errors={"ind": np.ones((5, 3))}, indicators=("ind",), reduction="per_variable"
+    )
+    for position in range(5):
+        obs = actor_observation(cache, at(), position, per_variable())
+        assert obs.shape == (17,)
+        assert obs[ERROR_FEATURES].tolist() == pytest.approx([1.0] * 6, abs=1e-6)
+
+
+# --- Every vector lies within its bounds (T7) ------------------------------------
+
+@pytest.mark.parametrize("normalization", NORMALIZATIONS)
+@pytest.mark.parametrize("errors", [ERRORS, ERRORS * 1e8, np.zeros(5), np.array([0.0, 1e-300, 1e300, 1.0, 0.0])],
+                         ids=["the instance", "large", "all zero", "extreme"])
+def test_every_instance_vector_is_inside_its_bounds(errors, normalization):
+    cfg = config(normalization)
+    for position in range(5):
+        for committed in (1, 5, 40):
+            assert inside(actor_observation(instance(errors), at(committed), position, cfg), cfg)
+
+
+@pytest.mark.parametrize("alpha", [0.007, 0.1, 0.3, 0.9])
+def test_every_two_column_vector_is_inside_its_bounds(alpha):
+    cfg = per_variable(alpha=alpha)
+    cache = columns(ERRORS, SECOND)
+    for position in range(5):
+        for round_index in (1, 2):
+            assert inside(actor_observation(cache, at(round_index=round_index), position, cfg), cfg)
+
+
+def test_the_worst_element_sits_on_the_upper_bound():
+    cfg = config()
+    _, high = feature_bounds(2, cfg)
+    obs = actor_observation(instance(), at(), 3, cfg)
+    assert obs[OWN_ERROR] == high[OWN_ERROR]
 
 
 # --- On the mock: a reference built from the geometry alone (S11) ----------------
@@ -657,10 +871,10 @@ def _reference(cache: RoundCache, round_state: RoundState, position: int, cfg: O
     ]
 
 
-def _two_cell_mesh() -> tuple[MockQuadBackend, SolverState]:
+def _two_cell_mesh(nvar: int = 1) -> tuple[MockQuadBackend, SolverState]:
     """The mock's own five-element mesh: cells A and B, A refined."""
     mock = MockQuadBackend(
-        nx=2, ny=1, periodic=(True, False), lo=(0.0, 0.0), hi=(2.0, 1.0), max_level=2, dt_base=0.25,
+        nx=2, ny=1, periodic=(True, False), lo=(0.0, 0.0), hi=(2.0, 1.0), max_level=2, nvar=nvar, dt_base=0.25,
         rotate_cells=False,
     )
     state = mock.reset({"x0": 0.5, "y0": 0.5, "width": 0.25}, amr_freq=4, initial_level=0)
@@ -668,10 +882,10 @@ def _two_cell_mesh() -> tuple[MockQuadBackend, SolverState]:
     return mock, state
 
 
-def _graded_mesh(periodic: tuple[bool, bool]) -> tuple[MockQuadBackend, SolverState]:
+def _graded_mesh(periodic: tuple[bool, bool], nvar: int = 1) -> tuple[MockQuadBackend, SolverState]:
     """A 4x4 grid at level 1 with the cells near the feature refined once
     more, the rotation on: levels 1 and 2, with 2:1 faces between them."""
-    mock = MockQuadBackend(nx=4, ny=4, periodic=periodic, max_level=2, dt_base=0.25, rotate_cells=True)
+    mock = MockQuadBackend(nx=4, ny=4, periodic=periodic, max_level=2, nvar=nvar, dt_base=0.25, rotate_cells=True)
     ic = {"x0": 0.3, "y0": 0.6, "width": 0.2}
     state = mock.reset(ic, amr_freq=4, initial_level=1)
     near = np.hypot(state.centroid[:, 0] - ic["x0"], state.centroid[:, 1] - ic["y0"]) < 0.15
@@ -682,9 +896,9 @@ def _graded_mesh(periodic: tuple[bool, bool]) -> tuple[MockQuadBackend, SolverSt
 
 MESHES = {
     "two cells": _two_cell_mesh,
-    "4x4 periodic": lambda: _graded_mesh((True, True)),
-    "4x4 walled": lambda: _graded_mesh((False, False)),
-    "4x4 mixed": lambda: _graded_mesh((True, False)),
+    "4x4 periodic": lambda nvar=1: _graded_mesh((True, True), nvar),
+    "4x4 walled": lambda nvar=1: _graded_mesh((False, False), nvar),
+    "4x4 mixed": lambda nvar=1: _graded_mesh((True, False), nvar),
 }
 
 
@@ -752,6 +966,39 @@ def test_the_mock_is_outside_the_1d_rules_regime():
         cfg = config(normalization, indicator="ind_b")
         own = [actor_observation(cache, at(committed=2), p, cfg)[OWN_ERROR] for p in (big, small)]
         assert bool(own[0] > own[1]) is larger_wins
+
+
+# --- On the mock at nvar = 3 (T6, T7) --------------------------------------------
+
+@pytest.mark.parametrize("indicator", ["ind_a", "ind_b"])
+@pytest.mark.parametrize("mesh", list(MESHES))
+def test_per_variable_at_nvar_3_gives_the_scalar_vector(mesh, indicator):
+    """The mock's variables are one field at three scales, so per-column
+    normalization reads all three alike and the vector is the scalar one.
+    This cannot tell the rule from a raw maximum (the mock's scalar is its
+    largest variable); test_one_columns_scale_changes_no_feature does."""
+    mock3, state3 = MESHES[mesh](nvar=3)
+    mock1, state1 = MESHES[mesh]()
+    assert np.array_equal(state3.centroid, state1.centroid)
+    three = read_round(mock3, state3, ("ind_a", "ind_b"), "per_variable")
+    one = read_round(mock1, state1, ("ind_a", "ind_b"), "scalar")
+    assert (three.n_comp, one.n_comp) == (3, 1)
+    round_state = at(committed=state3.n_active)
+    for position in range(state3.n_active):
+        wide = actor_observation(three, round_state, position, per_variable(indicator=indicator, element_budget=64))
+        narrow = actor_observation(one, round_state, position, config(indicator=indicator, element_budget=64))
+        assert wide.tolist() == pytest.approx(narrow.tolist(), abs=1e-5), f"position {position}"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATIONS)
+@pytest.mark.parametrize("mesh", list(MESHES))
+def test_on_the_mock_every_vector_is_inside_its_bounds(mesh, normalization):
+    mock, state = MESHES[mesh]()
+    cache = read_round(mock, state, ("ind_a", "ind_b"), "scalar")
+    for indicator in ("ind_a", "ind_b"):
+        cfg = config(normalization, indicator=indicator, element_budget=64)
+        for position in range(state.n_active):
+            assert inside(actor_observation(cache, at(committed=state.n_active), position, cfg), cfg)
 
 
 # --- At ndim = 1, against the sequential core's observation (S12) -----------------

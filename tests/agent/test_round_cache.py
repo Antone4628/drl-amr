@@ -9,15 +9,15 @@ AGENT_2D_ROADMAP item 2.1, signals C1-C8. Three groups:
   - on Python1DBackend: two intervals of three rounds, counted, each cache
     compared with a twin backend's direct read, bit for bit (C8).
 
-The counting wrapper forwards every verb to the real backend and counts the
-calls by name, so "one compute_error call per round" is read off a Counter.
+The counting wrapper is the counting fixture of tests/conftest.py: it
+forwards every verb to the real backend and counts the calls by name, so
+"one compute_error call per round" is read off a Counter.
 
 Run: pytest tests/agent/test_round_cache.py -v
 """
 from __future__ import annotations
 
 import dataclasses
-from collections import Counter
 
 import numpy as np
 import pytest
@@ -38,23 +38,6 @@ IC = {"x0": 0.5, "y0": 0.5, "width": 0.25}
 # Cell B's value of both indicators at t = 0: four widths from the feature.
 FAR = 16 * np.exp(-8.0)
 BASE_XELEM = np.array([-1.0, -0.4, 0.0, 0.4, 1.0])
-
-
-class CountingBackend:
-    """Forward every verb to a real backend and count the calls by name."""
-
-    def __init__(self, inner):
-        self.inner = inner
-        self.calls = Counter()
-
-    def __getattr__(self, name):
-        attr = getattr(self.inner, name)
-
-        def counted(*args, **kwargs):
-            self.calls[name] += 1
-            return attr(*args, **kwargs)
-
-        return counted
 
 
 class StubBackend:
@@ -280,10 +263,10 @@ def test_wrong_names_freeze_nothing():
 
 # --- On the mock: the instance (C1, C3, C4, C5, C7) ------------------------------
 
-def test_cache_1_of_the_instance():
+def test_cache_1_of_the_instance(counting):
     mock = make_mock()
     state = mock.reset(IC, amr_freq=4, initial_level=0)
-    backend = CountingBackend(mock)
+    backend = counting(mock)
     cache = read_round(backend, state, MOCK_NAMES, "scalar")
 
     assert dict(backend.calls) == {"compute_error": 1}
@@ -297,10 +280,10 @@ def test_cache_1_of_the_instance():
 
 
 @pytest.mark.parametrize("rotate_cells", [False, True], ids=["pinned", "rotating"])
-def test_one_interval_of_two_rounds_is_five_calls(rotate_cells):
+def test_one_interval_of_two_rounds_is_five_calls(rotate_cells, counting):
     mock = make_mock(rotate_cells=rotate_cells)
     state = mock.reset(IC, amr_freq=4, initial_level=0)
-    backend = CountingBackend(mock)
+    backend = counting(mock)
 
     cache1 = read_round(backend, state, MOCK_NAMES, "scalar")
     state, _ = backend.apply_marks(refine_cell_a(cache1.state))
@@ -339,9 +322,9 @@ def test_cache_1_survives_the_adapt():
         assert not cache1.errors[name].flags.writeable
 
 
-def test_reading_the_cache_calls_nothing():
+def test_reading_the_cache_calls_nothing(counting):
     mock = make_mock()
-    backend = CountingBackend(mock)
+    backend = counting(mock)
     state, _ = backend.apply_marks(refine_cell_a(mock.reset(IC, amr_freq=4, initial_level=0)))
     cache = read_round(backend, state, MOCK_NAMES, "scalar")
     before = dict(backend.calls)
@@ -424,10 +407,10 @@ def test_an_unknown_reduction_is_the_backends_error():
 
 # --- On Python1DBackend (C8) -----------------------------------------------------
 
-def test_1d_first_cache():
+def test_1d_first_cache(counting):
     inner, state = make_1d()
     twin, _ = make_1d()
-    backend = CountingBackend(inner)
+    backend = counting(inner)
     cache = read_round(backend, state, ONE_D_NAMES, "scalar")
 
     assert dict(backend.calls) == {"compute_error": 1}
@@ -440,7 +423,7 @@ def test_1d_first_cache():
 
 
 @pytest.mark.parametrize("seed", [0, 1])
-def test_1d_two_intervals_of_three_rounds(seed):
+def test_1d_two_intervals_of_three_rounds(seed, counting):
     """One compute_error per round on real numerics. The twin is a second
     backend driven through the same marks and intervals; it is read directly
     and never through a cache."""
@@ -448,7 +431,7 @@ def test_1d_two_intervals_of_three_rounds(seed):
     icase = int(rng.choice([1, 12, 16]))
     inner, state = make_1d(icase=icase)
     twin, _ = make_1d(icase=icase)
-    backend = CountingBackend(inner)
+    backend = counting(inner)
     assert state.max_level == 3
 
     for _ in range(2):
