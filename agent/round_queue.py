@@ -96,54 +96,63 @@ def round_thresholds(cache: RoundCache, config: ObservationConfig, beta: float) 
     return e_max, e_min
 
 
-def round_priority(
-    cache: RoundCache, config: ObservationConfig, e_max: np.ndarray, e_min: np.ndarray
+def zone_distance(
+    errors: np.ndarray, config: ObservationConfig, e_max: np.ndarray, e_min: np.ndarray
 ) -> np.ndarray:
-    """Each element's distance from the neutral zone, in decades.
+    """Each row's signed distance from the neutral zone, in decades.
 
     The sequential queue's formula, column by column, then one value per
-    element by the observation's rule, an element being as bad as its worst
+    row by the observation's rule, an element being as bad as its worst
     variable:
 
-        under-refined   some column is above its e_max; the priority is the
-                        largest log10(e / e_max) over columns
+        under-refined   some column is above its e_max; the distance is
+                        the largest log10(e / e_max) over columns, positive
         over-refined    otherwise, every column is below its e_min; the
-                        priority is the smallest log10(e_min / e) over
-                        columns, the margin of the worst one
+                        distance is minus the smallest log10(e_min / e)
+                        over columns, the margin of the worst one
         neutral         otherwise; 0
 
     The class is decided by comparison and only the size by logarithm.
-    Errors are floored first, so a zero error has a finite priority: at
+    Errors are floored first, so a zero error has a finite distance: at
     1e-30 under dynamo, as the sequential queue floors them, and at
     e_max * 10**-floor_decades under relative, the observation's floor. A
     column whose threshold is zero (at most 1e-30 under dynamo) takes no
     part in the test it belongs to; when no column has a live e_min, no
-    element is over-refined.
+    row is over-refined.
+
+    The queue reads the size (round_priority) and the reward reads the
+    sign as well (agent/round_reward.py). The rows need not be a cache's:
+    the global reward hands in an interval's accumulated errors.
 
     Args:
-        cache: The round's frozen state and indicator arrays.
-        config: The indicator, the normalization rule and its floor.
+        errors: Raw errors, (n, n_comp) float64, one row per element.
+        config: The normalization rule and its floor.
         e_max: Upper thresholds, (n_comp,), as round_thresholds returns.
         e_min: Lower thresholds, (n_comp,).
 
     Returns:
-        (n_active,) float64, a new array, by position; never negative.
+        (n,) float64, a new array, by row.
 
     Raises:
-        ValueError: As round_thresholds raises for the cache and the
-            configuration; or naming e_max or e_min, for an array of the
-            wrong form or with a negative or non-finite value.
+        ValueError: Naming errors, for an array of the wrong form;
+            starting with "normalization", for dynamo at more than one
+            column; or naming e_max or e_min, for an array of the wrong
+            form or with a negative or non-finite value.
     """
-    errors = _errors(cache, config)
+    if not isinstance(errors, np.ndarray) or errors.dtype != np.float64 or errors.ndim != 2 or errors.shape[1] < 1:
+        raise ValueError("errors: expected a 2-D float64 numpy array with at least one column")
+    n_comp = errors.shape[1]
+    if n_comp > 1 and config.normalization == "dynamo":
+        raise ValueError(f"normalization: 'dynamo' takes one column, and errors has {n_comp}")
     for name, value in (("e_max", e_max), ("e_min", e_min)):
-        if not isinstance(value, np.ndarray) or value.shape != (cache.n_comp,):
-            raise ValueError(f"{name}: expected a numpy array of shape ({cache.n_comp},)")
+        if not isinstance(value, np.ndarray) or value.shape != (n_comp,):
+            raise ValueError(f"{name}: expected a numpy array of shape ({n_comp},)")
         if not (np.isfinite(value).all() and (value >= 0).all()):
             raise ValueError(f"{name}: {value.tolist()}, expected finite values, none negative")
 
     if config.normalization == "dynamo":
         tiny = 1e-30
-        floor = np.full(cache.n_comp, 1e-30)
+        floor = np.full(n_comp, 1e-30)
     else:
         tiny = 0.0
         floor = e_max * 10.0**-config.floor_decades
@@ -159,7 +168,34 @@ def round_priority(
 
     under = ((floored > e_max) & up).any(axis=1)
     over = ((floored < e_min) | ~down).all(axis=1) & down.any()
-    return np.where(under, above.max(axis=1), np.where(over, below.min(axis=1), 0.0))
+    return np.where(under, above.max(axis=1), np.where(over, -below.min(axis=1), 0.0))
+
+
+def round_priority(
+    cache: RoundCache, config: ObservationConfig, e_max: np.ndarray, e_min: np.ndarray
+) -> np.ndarray:
+    """Each element's distance from the neutral zone, in decades.
+
+    The size of zone_distance on the cache's indicator array, without its
+    sign: how far above its e_max an under-refined element's worst column
+    is, how far below its e_min an over-refined element's nearest column
+    is, and 0 for a neutral one.
+
+    Args:
+        cache: The round's frozen state and indicator arrays.
+        config: The indicator, the normalization rule and its floor.
+        e_max: Upper thresholds, (n_comp,), as round_thresholds returns.
+        e_min: Lower thresholds, (n_comp,).
+
+    Returns:
+        (n_active,) float64, a new array, by position; never negative.
+
+    Raises:
+        ValueError: As round_thresholds raises for the cache and the
+            configuration; or naming e_max or e_min, for an array of the
+            wrong form or with a negative or non-finite value.
+    """
+    return np.abs(zone_distance(_errors(cache, config), config, e_max, e_min))
 
 
 def round_order(cache: RoundCache, config: ObservationConfig, e_max: np.ndarray, e_min: np.ndarray) -> np.ndarray:

@@ -102,3 +102,30 @@ def commit(state: SolverState, round_state: RoundState, position: int, action: i
     elif action == ACTION_COARSEN and (record[state.family[position]] == COARSEN).all():
         change = -arity
     return dataclasses.replace(round_state, committed=int(round_state.committed) + change, decisions=record)
+
+
+def overshoot(round_state: RoundState, state_after: SolverState) -> int:
+    """How far the realized mesh is above the committed count.
+
+    The committed count is exact for the marks a round requested;
+    apply_marks may realize more elements than that: a refine that balance
+    adds, or a family coarsen that balance undoes, each leaves the mesh
+    2**ndim - 1 above the count. This is that difference, for whoever
+    drives the round to log once per round: 0 when balance changed
+    nothing. Budget is not masked, so the mesh can pass the element budget
+    by this much while the resource feature, which reads the count, does
+    not show it until the next round.
+
+    On the mock it is never negative. Nothing here checks that: the two
+    arguments are subtracted as they are, and whether a backend can
+    realize fewer elements than the count is the harness's to assert.
+
+    Args:
+        round_state: The round's last RoundState, every position decided.
+        state_after: The state apply_marks returned for that round's
+            record.
+
+    Returns:
+        state_after.n_active minus the committed count, a Python int.
+    """
+    return int(state_after.n_active) - int(round_state.committed)
