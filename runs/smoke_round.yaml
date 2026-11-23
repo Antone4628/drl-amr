@@ -1,0 +1,11 @@
+git_commit: 0e248ad20782a8af9f7d7add02f26f834cf060c5
+git_dirty: false
+config_path: /Users/antonechacartegui/projects/drl-amr/results/smoke_round/config.yaml
+seed: 0
+created_at: '2026-11-23T14:53:26.789452+00:00'
+python: 3.11.11
+platform: macOS-15.7.8-arm64-arm-64bit
+run_id: smoke_round
+results_dir: /Users/antonechacartegui/projects/drl-amr/results/smoke_round
+total_timesteps: 4096
+indicator: ind_b
