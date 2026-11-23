@@ -1,0 +1,11 @@
+git_commit: d6922b15af217ac303df59d946efbca524c4b634
+git_dirty: false
+config_path: /Users/antonechacartegui/projects/drl-amr/results/round_sanity_s0/config.yaml
+seed: 0
+created_at: '2026-11-23T22:36:21.436432+00:00'
+python: 3.11.11
+platform: macOS-15.7.8-arm64-arm-64bit
+run_id: round_sanity_s0
+results_dir: /Users/antonechacartegui/projects/drl-amr/results/round_sanity_s0
+total_timesteps: 200000
+indicator: ind_b
