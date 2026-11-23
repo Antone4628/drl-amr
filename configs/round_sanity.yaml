@@ -1,0 +1,32 @@
+# The sanity task of AGENT_2D_ROADMAP item 3.2: MaskablePPO on the mock,
+# reading ind_b, with a feature that moves and a budget it can pass.
+#
+# Overrides of DEFAULTS in training/train_round.py; every key not named here
+# keeps its default. The seed is given on the command line:
+#
+#   python -m training.train_round --config configs/round_sanity.yaml \
+#       --seed 0 --results-dir results/round_sanity_s0
+#
+# Nothing learned on the mock's synthetic errors is a claim.
+
+observation:
+  # Reported, not enforced: between what a narrow feature asks for and what
+  # a wide one does, so the count passes it in some episodes.
+  element_budget: 96
+
+decision:
+  # On ind_b one refine lowers an element's value by 0.602 decades. At the
+  # default 1.2 the neutral zone is 0.2 decades wide and some elements are
+  # penalized at either level; from 1.602 up none is.
+  beta: 2.0
+
+episode:
+  # The feature travels 0.1 per interval and 0.4 per episode; a level-2
+  # cell is 0.0625 wide.
+  amr_freq: 10
+
+training:
+  total_timesteps: 200000
+
+checkpointing:
+  save_freq: 20000

@@ -29,13 +29,14 @@ from __future__ import annotations
 
 import argparse
 import copy
+import csv
 import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 from sb3_contrib import MaskablePPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 from stable_baselines3.common.monitor import Monitor
 
 from agent.round_observation import ObservationConfig
@@ -348,6 +349,71 @@ class SpecCheckpointCallback(BaseCallback):
         return True
 
 
+class RoundLogCallback(BaseCallback):
+    """Write one row per adaptation round to a CSV file.
+
+    The step that ends a round carries the round's counts in its info
+    (envs/round_env.py): n_active, the realized count; overshoot, how far
+    that is above the committed count; and skipped. This writes them as
+    they come, with where in the run they came, so the counts can be set
+    against the element budget, which nothing enforces.
+
+    Columns: timesteps, the model's step count at the round's last step;
+    episode, counted from 1; interval and round, of the round that ended;
+    committed, n_active minus overshoot; overshoot; n_active; skipped.
+
+    A round's row is written once its marks are applied. A backend failure
+    in the adapt itself leaves no counts and no row; one after it (the
+    interval's advance, or the next round's read) ends the episode at that
+    step, and the round's row is still written. One environment is read,
+    the first.
+
+    Args:
+        path: The file to write, replaced if it exists. Its folder must
+            exist.
+
+    Attributes:
+        rows: Rows written so far, the header not counted.
+    """
+
+    COLUMNS = ("timesteps", "episode", "interval", "round", "committed", "overshoot", "n_active", "skipped")
+
+    def __init__(self, path: str | Path) -> None:
+        super().__init__()
+        self.path = Path(path)
+        self.rows = 0
+        self._episode = 1
+        self._file = None
+        self._writer = None
+
+    def _on_training_start(self) -> None:
+        """Open the file and write the header."""
+        self._file = self.path.open("w", newline="", encoding="utf-8")
+        self._writer = csv.writer(self._file)
+        self._writer.writerow(self.COLUMNS)
+
+    def _on_step(self) -> bool:
+        """Write a row if this step ended a round; never stop training."""
+        info = self.locals["infos"][0]
+        if "n_active" in info:
+            committed = info["n_active"] - info["overshoot"]
+            self._writer.writerow(
+                [self.num_timesteps, self._episode, info["interval"], info["round_index"], committed,
+                 info["overshoot"], info["n_active"], info["skipped"]]
+            )
+            # A run that stops on an error still leaves its rows.
+            self._file.flush()
+            self.rows += 1
+        if self.locals["dones"][0]:
+            self._episode += 1
+        return True
+
+    def _on_training_end(self) -> None:
+        """Close the file."""
+        self._file.close()
+
+
+
 # --- The run -----------------------------------------------------------------------------
 
 def train(
@@ -356,11 +422,12 @@ def train(
     """One training run, from a configuration to its saved final model.
 
     Written into results_dir: config.yaml, the configuration as resolved;
-    monitor.csv, one row per episode; checkpoints/round_<steps>_steps.zip
-    every save_freq steps and final_model.zip at the end, each with its
-    spec beside it. Written into runs_dir: the run's manifest,
-    <results_dir's name>.yaml (tools/run_manifest.py), before anything is
-    built, so its git_dirty is the tree's state when the run began.
+    monitor.csv, one row per episode; rounds.csv, one row per adaptation
+    round; checkpoints/round_<steps>_steps.zip every save_freq steps and
+    final_model.zip at the end, each with its spec beside it. Written into
+    runs_dir: the run's manifest, <results_dir's name>.yaml
+    (tools/run_manifest.py), before anything is built, so its git_dirty is
+    the tree's state when the run began.
 
     Args:
         config: A run's configuration, as load_config returns it.
@@ -395,8 +462,9 @@ def train(
     model = build_model(env, config, verbose=verbose)
     # The one spec of the run: the environment built it, every save writes it.
     spec = env.unwrapped.observation_spec
-    callback = SpecCheckpointCallback(config["checkpointing"]["save_freq"], results / "checkpoints", spec)
-    model.learn(total_timesteps=training["total_timesteps"], callback=callback)
+    checkpoints = SpecCheckpointCallback(config["checkpointing"]["save_freq"], results / "checkpoints", spec)
+    rounds = RoundLogCallback(results / "rounds.csv")
+    model.learn(total_timesteps=training["total_timesteps"], callback=CallbackList([checkpoints, rounds]))
     save_checkpoint(model, spec, results / "final_model")
     env.close()
     return model

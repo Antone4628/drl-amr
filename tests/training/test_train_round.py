@@ -2,7 +2,8 @@
 one configuration, a run built from it, and no weights on disk without
 their observation spec.
 
-AGENT_2D_ROADMAP item 3.1, sitting 3, signals S7-S14. Six groups:
+AGENT_2D_ROADMAP item 3.1, sitting 3, signals S7-S14; item 3.2, signals G1
+and G6. Seven groups:
 
   - the configuration: the defaults, a YAML file over them, and what is
     refused by name (S7);
@@ -13,6 +14,8 @@ AGENT_2D_ROADMAP item 3.1, sitting 3, signals S7-S14. Six groups:
     to the environment's (S9), both networks moved (S10), one seed one run
     (S11), the masks as what keeps it alive (S12), a checkpoint reloaded in
     a fresh interpreter (S13), training past a backend failure (S14);
+  - the round log: one row per adaptation round, written once the round's
+    marks are applied (G6);
   - the command line;
   - what the module imports.
 
@@ -50,6 +53,7 @@ from training.round_policy import RoundPolicy
 from training.train_round import (
     DEFAULTS,
     PROJECT_ROOT,
+    RoundLogCallback,
     SpecCheckpointCallback,
     build_backend,
     build_env,
@@ -234,6 +238,24 @@ def test_the_resolved_configuration_survives_yaml(tmp_path):
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     assert load_config(path) == config
     assert list(yaml.safe_load(path.read_text(encoding="utf-8"))) == list(DEFAULTS)
+
+
+def test_the_sanity_tasks_file_overrides_five_leaves():
+    """configs/round_sanity.yaml, the task of item 3.2 (G1)."""
+    config = load_config(PROJECT_ROOT / "configs" / "round_sanity.yaml")
+    changed = {
+        (section, key): config[section][key]
+        for section in DEFAULTS
+        for key in DEFAULTS[section]
+        if config[section][key] != DEFAULTS[section][key]
+    }
+    assert changed == {
+        ("observation", "element_budget"): 96,
+        ("decision", "beta"): 2.0,
+        ("episode", "amr_freq"): 10,
+        ("training", "total_timesteps"): 200_000,
+        ("checkpointing", "save_freq"): 20_000,
+    }
 
 
 # --- The backend, the environment, the model ---------------------------------------
@@ -429,7 +451,7 @@ def test_a_run_trains_its_step_count(run):
 def test_a_run_writes_its_files_and_no_others(run):
     checkpoints = {f"checkpoints/round_{steps}_steps{end}" for steps in (32, 64, 96) for end in (".zip", ".spec.json")}
     assert _files(run.results) == checkpoints | {
-        "config.yaml", "monitor.csv", "final_model.zip", "final_model.spec.json",
+        "config.yaml", "monitor.csv", "rounds.csv", "final_model.zip", "final_model.spec.json",
     }
 
 
@@ -580,6 +602,133 @@ def test_a_spec_finding_stops_the_run_at_its_first_reset():
     model = build_model(build_env(config, backend=backend), config)
     with pytest.raises(ValueError, match="spec: max_level: the spec says 3, the round has 2"):
         model.learn(total_timesteps=32)
+
+
+# --- The round log (item 3.2, G6) --------------------------------------------------
+
+ROUND = {"interval": 2, "round_index": 1, "n_active": 14, "overshoot": 3, "skipped": 5}
+
+
+def _logged(results: Path) -> list[dict[str, int]]:
+    """A folder's rounds.csv as integers, its header checked on the way."""
+    lines = (results / "rounds.csv").read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "timesteps,episode,interval,round,committed,overshoot,n_active,skipped"
+    return [{key: int(value) for key, value in row.items()} for row in csv.DictReader(lines)]
+
+
+def _fed(tmp_path: Path) -> tuple[RoundLogCallback, SimpleNamespace]:
+    """A round log started by hand, with the stand-in model whose step count
+    it reads: what learn does to a callback before the first step."""
+    model = SimpleNamespace(num_timesteps=0)
+    callback = RoundLogCallback(tmp_path / "rounds.csv")
+    callback.init_callback(model)
+    callback.on_training_start({}, {})
+    return callback, model
+
+
+def _feed(callback: RoundLogCallback, model: SimpleNamespace, timesteps: int, info: dict, done: bool = False) -> None:
+    """One step, as the rollout hands it over: the count, then the locals."""
+    model.num_timesteps = timesteps
+    callback.update_locals({"infos": [info], "dones": [done]})
+    assert callback.on_step() is True
+
+
+def test_the_round_log_has_one_row_per_round(run):
+    rows = _logged(run.results)
+    assert rows
+    assert all(row["committed"] + row["overshoot"] == row["n_active"] for row in rows)
+    steps = [row["timesteps"] for row in rows]
+    assert steps == sorted(set(steps)) and steps[-1] <= 96
+    # Every complete episode of the instance is four rounds, two intervals
+    # of two, and its last row is written at the step that ended it.
+    episodes = _episodes(run.results)
+    end = 0
+    for number, (_, length) in enumerate(episodes, start=1):
+        end += int(length)
+        mine = [row for row in rows if row["episode"] == number]
+        assert [(row["interval"], row["round"]) for row in mine] == [(1, 1), (1, 2), (2, 1), (2, 2)]
+        assert mine[-1]["timesteps"] == end
+    assert {row["episode"] for row in rows} <= set(range(1, len(episodes) + 2))
+
+
+def test_the_round_log_is_closed_and_counted_when_a_run_returns(monkeypatch, tmp_path):
+    made = []
+
+    class Watched(RoundLogCallback):
+        def __init__(self, path) -> None:
+            super().__init__(path)
+            made.append(self)
+
+    monkeypatch.setattr(train_round, "RoundLogCallback", Watched)
+    results = tmp_path / "results" / "logged"
+    train(_small(), results, runs_dir=tmp_path / "runs")
+    (callback,) = made
+    assert callback.path == results.resolve() / "rounds.csv"
+    assert callback._file.closed
+    assert callback.rows == len(_logged(results)) > 0
+
+
+def test_a_step_that_ends_no_round_writes_nothing(tmp_path):
+    callback, model = _fed(tmp_path)
+    _feed(callback, model, 1, {"position": 0, "round_index": 1, "interval": 1, "transition": "element"})
+    _feed(callback, model, 2, {"transition": "failure", "backend_failure": "on demand"}, done=True)
+    callback.on_training_end()
+    assert callback.rows == 0 and _logged(tmp_path) == []
+
+
+def test_a_row_is_the_rounds_counts_and_where_they_came(tmp_path):
+    callback, model = _fed(tmp_path)
+    _feed(callback, model, 57, dict(ROUND, position=3, transition="round"))
+    callback.on_training_end()
+    assert callback.rows == 1
+    assert _logged(tmp_path) == [
+        {"timesteps": 57, "episode": 1, "interval": 2, "round": 1, "committed": 11, "overshoot": 3, "n_active": 14,
+         "skipped": 5},
+    ]
+
+
+def test_the_episode_number_rises_after_the_step_that_ends_one(tmp_path):
+    callback, model = _fed(tmp_path)
+    _feed(callback, model, 10, ROUND)
+    _feed(callback, model, 12, ROUND, done=True)
+    _feed(callback, model, 13, {"transition": "element"})
+    _feed(callback, model, 15, ROUND)
+    callback.on_training_end()
+    assert [(row["timesteps"], row["episode"]) for row in _logged(tmp_path)] == [(10, 1), (12, 1), (15, 2)]
+
+
+def test_a_row_is_on_disk_before_the_file_is_closed(tmp_path):
+    callback, model = _fed(tmp_path)
+    _feed(callback, model, 4, ROUND)
+    assert not callback._file.closed
+    assert [row["timesteps"] for row in _logged(tmp_path)] == [4]
+    callback.on_training_end()
+    assert callback._file.closed
+
+
+def test_a_file_already_there_is_replaced(tmp_path):
+    (tmp_path / "rounds.csv").write_text("left,over\n1,2\n", encoding="utf-8")
+    callback, _ = _fed(tmp_path)
+    callback.on_training_end()
+    assert _logged(tmp_path) == []
+
+
+@pytest.mark.parametrize("verb, logged", [("apply_marks", False), ("step_interval", True)])
+def test_a_round_is_logged_once_its_marks_are_applied(failing, tmp_path, verb, logged):
+    """A failed adapt leaves no counts and no row. A failure after the adapt
+    ends the episode at that step, and the round's row is still written."""
+    config = _small()
+    env = build_env(config, backend=failing(build_backend(config), verb, at=1)).unwrapped
+    env.reset(options={"ic": IC})
+    terminated, steps = False, 0
+    while not terminated:
+        _, _, terminated, _, info = env.step(1)
+        steps += 1
+    assert info["transition"] == "failure" and ("n_active" in info) is logged
+    callback, model = _fed(tmp_path)
+    _feed(callback, model, steps, info, done=True)
+    callback.on_training_end()
+    assert [row["timesteps"] for row in _logged(tmp_path)] == ([steps] if logged else [])
 
 
 # --- The command line --------------------------------------------------------------
