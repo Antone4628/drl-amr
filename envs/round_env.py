@@ -98,6 +98,8 @@ class RoundEnv(gym.Env):
         lambda_global: float,
     ) -> None:
         super().__init__()
+        if not isinstance(observation_config, ObservationConfig):
+            raise ValueError(f"observation_config: {observation_config!r}, expected an ObservationConfig")
         counts = {"n_intervals": (n_intervals, 1), "amr_freq": (amr_freq, 1), "initial_level": (initial_level, 0),
                   "cadence": (cadence, 1)}
         for name, (value, least) in counts.items():

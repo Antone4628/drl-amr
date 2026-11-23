@@ -279,6 +279,8 @@ REFUSED = [
     ("max_level", 0, "max_level: 0, expected an integer of at least 1"),
     ("beta", 1, "beta: 1, expected a finite number above 1"),
     ("coarsen_rule", "first", "coarsen_rule: 'first', expected one of ['first_decider', 'any_coarsen', 'unanimous']"),
+    ("observation_config", None, "observation_config: None, expected an ObservationConfig"),
+    ("observation_config", "ind_b", "observation_config: 'ind_b', expected an ObservationConfig"),
 ]
 
 
