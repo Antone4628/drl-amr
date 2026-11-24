@@ -1,10 +1,12 @@
 """The environment of the 2D agent core: one element's decision per step.
 
-RoundEnv puts the round loop of the 2D core (agent/round_*.py) behind the
-two calls an RL library makes. The library owns the loop, so the
-environment stops after every decision and holds what the loop would have
-held: the interval's thresholds, the round's cache, order and distances,
-the cursor into the order, and the RoundState.
+RoundEnv puts the interval driver of the 2D stack (drivers/round_driver.py)
+behind the two calls an RL library makes. The library owns the loop, so
+the environment stops after every decision. The driver holds the interval:
+the state, the round's cache and order, the cursor, the RoundState and the
+thresholds, and it makes every call to the backend but describe. The
+environment holds what training adds: the draw of the initial condition,
+the episode's length, the round's distances and the two rewards.
 
 One remesh interval is max_level rounds (D-018). A round is one read of
 the backend, then one step() per position the queue asks; when the queue
@@ -16,13 +18,13 @@ The reward of a step is lambda_local times the decision's local reward;
 the step that ends an interval adds lambda_global times the interval's
 global reward (D-007).
 
-The environment builds one ObservationSpec and hands its values to every
-function of the core, so what a policy trains with is what is saved beside
-its checkpoints (agent/round_spec.py).
+The environment builds one ObservationSpec and hands it to the driver, so
+what a policy trains with is what is saved beside its checkpoints
+(agent/round_spec.py).
 
-This module belongs to the 2D stack (AGENT_2D_ROADMAP item 3.1) and stands
-beside envs/multiround_env.py, the sequential environment, which is not on
-this path.
+This module belongs to the 2D stack (AGENT_2D_ROADMAP item 3.1; over the
+driver since item 4.1) and stands beside envs/multiround_env.py, the
+sequential environment, which is not on this path.
 """
 from __future__ import annotations
 
@@ -34,14 +36,12 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from agent.round_cache import read_round
-from agent.round_commit import commit, overshoot, start_round
-from agent.round_mask import action_mask
 from agent.round_observation import ObservationConfig, observation, observation_bounds
-from agent.round_queue import next_undecided, round_order, round_thresholds, zone_distance
+from agent.round_queue import zone_distance
 from agent.round_reward import global_reward, local_reward
 from agent.round_spec import ObservationSpec, spec_violations
 from contract.backend import BackendFailure, SolverBackend
+from drivers.round_driver import RoundDriver
 
 
 class RoundEnv(gym.Env):
@@ -52,7 +52,8 @@ class RoundEnv(gym.Env):
     dict with the keys "actor" and "critic" (agent/round_observation.py).
 
     Args:
-        backend: The backend to drive. Only its verbs are called.
+        backend: The backend to drive. The environment calls describe
+            alone; its RoundDriver calls the other verbs.
         observation_config: What the observation is built with.
         beta: The hysteresis exponent of the thresholds, above 1.
         coarsen_rule: One of agent.round_mask.COARSEN_RULES.
@@ -72,6 +73,9 @@ class RoundEnv(gym.Env):
         lambda_local: Scale of the local reward, paid at every step.
         lambda_global: Scale of the global reward, paid at the step that
             ends an interval.
+
+    Attributes:
+        driver: The RoundDriver that holds the interval.
 
     Raises:
         ValueError: Naming the argument; or as ObservationSpec raises.
@@ -140,57 +144,44 @@ class RoundEnv(gym.Env):
         )
         self.action_space = spaces.Discrete(3)
 
-        # What moves between calls. Set by reset; _position is None when no
-        # episode is running.
+        # The interval is the driver's. It is asked to accumulate the
+        # indicator over each interval, for the global reward.
+        self.driver = RoundDriver(
+            backend, self.observation_spec, cadence=self.cadence, accumulate=(observation_config.indicator,)
+        )
+
+        # What the environment itself holds between calls: whether an
+        # episode is running, and the round's distances.
         self._spec_checked = False
-        self._interval = 0
-        self._state = None
-        self._cache = None
-        self._pair = None
-        self._order = None
+        self._running = False
         self._distance = None
-        self._round_state = None
-        self._position = None
-        self._cursor = 0
-        self._skipped = 0
 
-    # --- The round: what item 4.1's driver will hold --------------------------------
+    # --- What training adds to the driver's interval --------------------------------
 
-    def _begin_round(self, round_index: int) -> None:
-        """Read the backend once and set up the round's walk.
+    def _measure(self) -> None:
+        """The round's distances from the neutral zone, for the local reward.
 
-        In round 1 the thresholds are taken from this read and become the
-        interval's: every later round of the interval orders its queue and
-        measures its distances under the same pair (D-021).
-
-        Raises:
-            BackendFailure: If the backend's arrays are not finite.
+        Measured under the interval's thresholds, which the driver holds,
+        once at every round's start (D-021).
         """
-        spec = self.observation_spec
-        config = spec.observation
-        self._cache = read_round(self.backend, self._state, [config.indicator], config.reduction)
-        if round_index == 1:
-            self._pair = round_thresholds(self._cache, config, spec.beta)
-        self._order = round_order(self._cache, config, *self._pair)
-        self._distance = zone_distance(self._cache.errors[config.indicator], config, *self._pair)
-        self._round_state = start_round(self._state, round_index, spec.n_rounds)
-        self._position, self._cursor, self._skipped = next_undecided(self._state, self._round_state, self._order, 0)
+        config = self.observation_spec.observation
+        driver = self.driver
+        self._distance = zone_distance(driver.cache.errors[config.indicator], config, *driver.thresholds)
 
     def _advance(self, info: dict[str, Any]) -> tuple[str, float]:
-        """Move to the next position to ask, across whatever ends on the way.
+        """Advance the driver, and do what training owes for what ended.
 
-        Called after a commit. While the round's queue still holds an
-        undecided position, that is all that happens. When it is exhausted
-        the round's marks are applied; then either the next round begins,
-        or, after the interval's last round, the backend advances one
-        interval, the interval's global reward is computed, and the next
-        interval begins unless the episode is over.
+        Called after a commit. At a round's end the round's distances are
+        measured anew. At an interval's end the interval's global reward
+        is computed, under the thresholds of the interval that ended, and
+        the next interval is begun unless the episode is over.
 
         Args:
             info: The step's info dict. At a round's end it gains overshoot
                 (the realized count above the committed count), skipped
                 (positions the round passed over as already decided) and
-                n_active (the realized count).
+                n_active (the realized count), from the driver's record:
+                also when a backend call after the adapt fails.
 
         Returns:
             What ended: "element" (nothing), "round", "interval" or "done";
@@ -200,45 +191,41 @@ class RoundEnv(gym.Env):
         Raises:
             BackendFailure: If a verb fails or an array is not finite.
         """
-        spec = self.observation_spec
-        config = spec.observation
-        self._position, self._cursor, passed = next_undecided(
-            self._state, self._round_state, self._order, self._cursor
-        )
-        self._skipped += passed
-        if self._position is not None:
+        driver = self.driver
+        try:
+            ended = driver.advance()
+        finally:
+            record = driver.round_record
+            if record is not None:
+                info["overshoot"] = record.overshoot
+                info["skipped"] = record.skipped
+                info["n_active"] = record.n_active
+        if ended == "element":
             return "element", 0.0
-
-        # The queue is exhausted: the record is the round's marks.
-        round_index = self._round_state.round_index
-        new_state, _ = self.backend.apply_marks(self._round_state.decisions)
-        info["overshoot"] = overshoot(self._round_state, new_state)
-        info["skipped"] = self._skipped
-        info["n_active"] = new_state.n_active
-        self._state = new_state
-        if round_index < spec.n_rounds:
-            self._begin_round(round_index + 1)
+        if ended == "round":
+            self._measure()
             return "round", 0.0
 
-        # The interval's last round: advance, and judge the mesh it left.
-        report = self.backend.step_interval([config.indicator], config.reduction, self.cadence)
+        # The interval's last round: judge the mesh it left.
+        config = self.observation_spec.observation
         r_global = global_reward(
-            report.acc[config.indicator],
-            self._state.level,
-            self._state.max_level,
+            driver.interval_report.acc[config.indicator],
+            driver.state.level,
+            driver.state.max_level,
             config,
-            *self._pair,
+            *driver.thresholds,
             **self._global_weights,
         )
-        self._interval += 1
-        if self._interval == self.n_intervals:
+        if driver.interval == self.n_intervals:
             return "done", r_global
-        self._begin_round(1)
+        driver.begin_interval()
+        self._measure()
         return "interval", r_global
 
     def _observation(self) -> dict[str, np.ndarray]:
         """The observation dict of the position the queue is asking."""
-        return observation(self._cache, self._round_state, self._position, self.observation_spec.observation)
+        driver = self.driver
+        return observation(driver.cache, driver.round_state, driver.position, self.observation_spec.observation)
 
     def _zeros(self) -> dict[str, np.ndarray]:
         """The observation returned when an episode ends: zeros, in the space."""
@@ -257,7 +244,7 @@ class RoundEnv(gym.Env):
         seeds.
 
         The first reset of the environment's life compares the spec with
-        the round it has just read (spec_violations).
+        the round the driver has just read (spec_violations).
 
         Returns:
             The observation dict, and an info dict: ic, n_active, and the
@@ -270,25 +257,26 @@ class RoundEnv(gym.Env):
                 there is no episode to end.
         """
         super().reset(seed=seed)
-        self._position = None
+        self._running = False
         if options is not None and "ic" in options:
             ic = {name: float(value) for name, value in options["ic"].items()}
         else:
             ic = {name: float(self.np_random.uniform(low, high)) for name, (low, high) in self._ic_params.items()}
-        self._state = self.backend.reset(ic, self.amr_freq, self.initial_level)
-        self._interval = 0
-        self._begin_round(1)
+        driver = self.driver
+        state = driver.reset(ic, self.amr_freq, self.initial_level)
+        self._measure()
         if not self._spec_checked:
-            found = spec_violations(self.observation_spec, self._cache, self._round_state)
+            found = spec_violations(self.observation_spec, driver.cache, driver.round_state)
             if found:
-                self._position = None
                 raise ValueError("spec: " + "; ".join(found))
             self._spec_checked = True
+        self._running = True
+        e_max, e_min = driver.thresholds
         info = {
             "ic": ic,
-            "n_active": self._state.n_active,
-            "e_max": self._pair[0].tolist(),
-            "e_min": self._pair[1].tolist(),
+            "n_active": state.n_active,
+            "e_max": e_max.tolist(),
+            "e_min": e_min.tolist(),
         }
         return self._observation(), info
 
@@ -298,9 +286,9 @@ class RoundEnv(gym.Env):
         Raises:
             RuntimeError: If no episode is running.
         """
-        if self._position is None:
+        if not self._running:
             raise RuntimeError("action_masks: no episode is running, call reset")
-        return action_mask(self._state, self._round_state, self._position, self.observation_spec.coarsen_rule)
+        return self.driver.action_mask()
 
     def step(self, action: int) -> tuple[dict[str, np.ndarray], float, bool, bool, dict[str, Any]]:
         """Commit one decision for the asked element and move to the next.
@@ -332,17 +320,20 @@ class RoundEnv(gym.Env):
             ValueError: As commit raises, for an action that is not an
                 action index or is masked. Nothing has changed.
         """
-        if self._position is None:
+        if not self._running:
             raise RuntimeError("step: no episode is running, call reset")
-        rule = self.observation_spec.coarsen_rule
+        driver = self.driver
         action = int(action)
-        position = self._position
-        self._round_state = commit(self._state, self._round_state, position, action, rule)
-        r_local = local_reward(self._state, self._distance, position, action, rule, **self._local_weights)
+        # What the local reward reads, taken before the advance can replace it.
+        state, position = driver.state, driver.position
+        driver.commit(action)
+        r_local = local_reward(
+            state, self._distance, position, action, self.observation_spec.coarsen_rule, **self._local_weights
+        )
         info: dict[str, Any] = {
             "position": position,
-            "round_index": self._round_state.round_index,
-            "interval": self._interval + 1,
+            "round_index": driver.round_state.round_index,
+            "interval": driver.interval + 1,
             "r_local": r_local,
             "r_global": 0.0,
         }
@@ -351,7 +342,7 @@ class RoundEnv(gym.Env):
         except BackendFailure as failure:
             # The one place a failure is caught. The episode is over; what
             # the backend holds is unknown until the next reset.
-            self._position = None
+            self._running = False
             info["transition"] = "failure"
             info["backend_failure"] = str(failure)
             return self._zeros(), self.lambda_local * r_local, True, False, info
@@ -359,5 +350,6 @@ class RoundEnv(gym.Env):
         info["r_global"] = r_global
         reward = self.lambda_local * r_local + self.lambda_global * r_global
         if transition == "done":
+            self._running = False
             return self._zeros(), reward, True, False, info
         return self._observation(), reward, False, False, info

@@ -1,9 +1,11 @@
 """Tests for the 2D environment, envs/round_env.py: one element's decision
 per step, on the mock quad backend.
 
-AGENT_2D_ROADMAP item 3.1, sitting 1, signals E1-E14. No RL library is
+AGENT_2D_ROADMAP item 3.1, sitting 1, signals E1-E14; item 4.1, signal D10:
+the environment stands over the interval driver (drivers/round_driver.py),
+and every test of item 3.1 holds as it was written. No RL library is
 imported: the environment is driven by scripted and by random masked
-actions. Ten groups:
+actions. Eleven groups:
 
   - construction: the spec, the spaces, what is refused (E1);
   - the reset: the first asked element, the seeded initial condition (E2,
@@ -19,7 +21,9 @@ actions. Ten groups:
   - the overshoot and the refused action (E8, E9);
   - a backend that fails (E10, E11);
   - the spec check at the first reset (E12);
-  - what the module imports.
+  - the driver under the environment: what it is built with, and that the
+    thresholds and the round's counts are its own (D10);
+  - what the module imports, and which verb it calls itself.
 
 Run: pytest tests/envs/test_round_env.py -v
 """
@@ -44,6 +48,7 @@ from agent.round_spec import ObservationSpec
 from backends.mock_quad.backend import MockQuadBackend
 from contract.backend import BackendFailure
 from contract.reports import IntervalReport
+from drivers.round_driver import RoundDriver
 from envs.round_env import RoundEnv
 
 C, H, R = ACTION_COARSEN, ACTION_HOLD, ACTION_REFINE
@@ -988,6 +993,82 @@ def test_the_spec_is_checked_once_per_environment(monkeypatch):
     assert len(calls) == 2
 
 
+# --- The driver under the environment (item 4.1, D10) ------------------------------
+
+def test_the_environment_drives_through_one_round_driver():
+    backend = _two_cells()
+    env = _env(backend, cadence=3)
+    driver = env.driver
+    assert type(driver) is RoundDriver
+    assert driver.backend is backend is env.backend and driver.spec is env.observation_spec
+    assert (driver.cadence, driver.accumulate) == (3, ("ind_b",))
+    assert driver.position is None
+    for _ in range(2):
+        _episode(env, _holds)
+        assert env.driver is driver
+
+
+def test_the_thresholds_and_the_asked_position_are_the_drivers(instance):
+    env = _env()
+    _, info = env.reset(options={"ic": IC})
+    driver = env.driver
+    assert info["e_max"] == driver.thresholds[0].tolist() and info["e_min"] == driver.thresholds[1].tolist()
+    assert info["n_active"] == driver.state.n_active
+    first_pair = driver.thresholds
+    for number, action in enumerate(SCRIPT):
+        asked, interval = driver.position, driver.interval
+        assert np.array_equal(env.action_masks(), driver.action_mask())
+        step = env.step(action)[4]
+        assert (step["position"], step["interval"]) == (asked, interval + 1)
+        assert (driver.thresholds is first_pair) is (number < 6)
+    assert driver.position is None and driver.interval == 2
+
+
+def test_a_rounds_counts_are_the_drivers_record(instance):
+    env = _env()
+    env.reset(options={"ic": IC})
+    for number, action in enumerate(SCRIPT):
+        info = env.step(action)[4]
+        record = env.driver.round_record
+        if instance[number]["transition"] == "interval":
+            # The next interval has begun; the record is still the round's.
+            assert env.driver.position is not None
+        if "overshoot" in info:
+            assert (info["overshoot"], info["skipped"], info["n_active"]) == (
+                record.overshoot, record.skipped, record.n_active,
+            )
+            assert (record.interval, record.round_index) == (info["interval"], info["round_index"])
+        else:
+            assert record is None
+
+
+@pytest.mark.parametrize("verb, at, last", FAILURES, ids=FAILURE_IDS)
+def test_a_failure_leaves_the_driver_asking_nothing_and_the_counts_of_an_applied_round(failing, verb, at, last):
+    """The counts are in info exactly when the round's marks were applied:
+    not after a failed adapt."""
+    env = _env(failing(_two_cells(), verb, at))
+    env.reset(options={"ic": IC})
+    for number in range(last):
+        info = env.step(SCRIPT[number])[4]
+    assert info["transition"] == "failure" and env.driver.position is None
+    assert ("n_active" in info) is (verb != "apply_marks")
+    assert ("overshoot" in info) is ("skipped" in info) is ("n_active" in info)
+
+
+def test_a_reset_that_raises_leaves_no_episode_in_the_environments_own_words():
+    """An episode was running; the next reset is refused by the backend.
+    What follows is refused by the environment, not by the driver under it."""
+    env = _env()
+    env.reset(options={"ic": IC})
+    with pytest.raises(ValueError, match=r"^ic: unknown names"):
+        env.reset(options={"ic": {"x0": 0.3, "y0": 0.6}})
+    with pytest.raises(RuntimeError, match=r"^step: no episode is running, call reset$"):
+        env.step(H)
+    with pytest.raises(RuntimeError, match=r"^action_masks: no episode is running, call reset$"):
+        env.action_masks()
+    assert env.reset(options={"ic": IC})[1]["n_active"] == 2
+
+
 # --- What the module imports -------------------------------------------------------
 
 def _imported(path: Path) -> set[str]:
@@ -1003,7 +1084,35 @@ def _imported(path: Path) -> set[str]:
 def test_the_environment_imports_no_rl_library_and_nothing_sequential():
     names = _imported(Path(round_env.__file__))
     roots = {name.split(".")[0] for name in names}
-    assert not roots & {"stable_baselines3", "sb3_contrib", "torch", "drivers", "deployment", "training", "backends"}
-    sequential = {"agent.core", "agent.masking", "agent.observation", "agent.queue", "agent.reward", "agent"}
+    assert not roots & {"stable_baselines3", "sb3_contrib", "torch", "deployment", "training", "backends"}
+    sequential = {
+        "agent.core", "agent.masking", "agent.observation", "agent.queue", "agent.reward", "agent", "drivers",
+        "drivers.multiround_driver",
+    }
     assert not names & sequential
     assert "gymnasium" in roots
+
+
+def test_the_environment_imports_the_driver_and_none_of_what_the_driver_holds():
+    names = _imported(Path(round_env.__file__))
+    ours = {name for name in names if name.split(".")[0] in {
+        "agent", "analysis", "backends", "contract", "deployment", "drivers", "envs", "tools", "training",
+    }}
+    assert ours == {
+        "agent.round_observation", "agent.round_queue", "agent.round_reward", "agent.round_spec",
+        "contract.backend", "drivers.round_driver",
+    }
+
+
+def test_the_environment_itself_calls_describe_alone():
+    """Every other verb of the backend is the driver's to call."""
+    called = set()
+    for node in ast.walk(ast.parse(Path(round_env.__file__).read_text(encoding="utf-8"))):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        owner = node.func.value
+        if (isinstance(owner, ast.Name) and owner.id == "backend") or (
+            isinstance(owner, ast.Attribute) and owner.attr == "backend"
+        ):
+            called.add(node.func.attr)
+    assert called == {"describe"}
