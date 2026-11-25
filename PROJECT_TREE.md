@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-11-24 10:51:30
+Generated: 2026-11-25 08:25:50
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -157,6 +157,8 @@ drl-amr/
 │   │   ├── test_contract_impl.py
 │   │   ├── test_python1d_backend_lockstep.py
 │   │   └── test_python1d_backend_state.py
+│   ├── tools/
+│   │   └── test_scripted_harness.py
 │   ├── training/
 │   │   ├── test_diagnostics.py
 │   │   ├── test_round_policy.py
@@ -200,6 +202,7 @@ drl-amr/
 │   ├── plot_dg_1d.py
 │   ├── projection_exactness.py
 │   ├── run_manifest.py
+│   ├── scripted_harness.py
 │   ├── tree_gen.py
 │   └── visual_eval.py
 ├── training/
