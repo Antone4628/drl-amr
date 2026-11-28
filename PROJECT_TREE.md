@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-11-28 07:04:19
+Generated: 2026-11-28 11:45:58
 Project: drl-amr
 Included: .py
 Data dirs: collapsed
@@ -171,6 +171,9 @@ drl-amr/
 │   │   ├── bridge_b0/
 │   │   │   ├── b01_ladder.py
 │   │   │   ├── b02_overhead.py
+│   │   │   ├── b03_child.py
+│   │   │   ├── b03_host.py
+│   │   │   ├── b03_worker.py
 │   │   │   └── manifest_overlap.py
 │   │   ├── cases/
 │   │   │   ├── advection2d_dg_amr/
